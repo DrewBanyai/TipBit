@@ -199,15 +199,17 @@ def processSingleComment(comment):
 				print('Failed to tip {} (non-existent account)'.format(targetName))
 			else: #  Redditor is valid
 				#  Ensure that the next string value is a number
-				separate_around_amount = separate_around_target[2].partition(" ")
+				separate_around_amount = separate_around_target[2].partition(' ')
+				if ('\n' in separate_around_amount[0]):
+					separate_around_amount = separate_around_amount[0].partition('\n')
+					
 				amountString = separate_around_amount[0]
-				print('amountString on tip: {}'.format(amountString))
-				if not isStringInt(amountString):
+				if not isStringFloat(amountString):
 					#  FAILED TIP: Amount not specified correctly in comment
 					CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_SPECIFIED_TEXT, targetName)
 					print('Failed to tip {} (unspecified amount: {})'.format(targetName, amountString))
 				else:
-					amountSatoshi = int(amountString)
+					amountSatoshi = int(currency_to_satoshi_cached(amountString, 'mbtc'))
 					RegisterUser(senderName, False)
 					if (not isBalanceSufficient(senderName, amountSatoshi)):
 						#  FAILED TIP: Amount not available in user balance
@@ -216,8 +218,8 @@ def processSingleComment(comment):
 					else:
 						#  SUCCESSFUL TIP
 						processSingleTip(senderName, targetName, amountSatoshi)
-						CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, satoshi_to_currency(amount, 'usd'), botSpecificData.BOT_INTRO_LINK)
-						print('Successful tip: {} -> {} ({})'.format(senderName, targetName, amount))
+						CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, satoshi_to_currency(amountSatoshi, 'usd'), botSpecificData.BOT_INTRO_LINK)
+						print('Successful tip: {} -> {} ({})'.format(senderName, targetName, amountString))
 		else:
 			print("Caught a comment reply with no mention. We should discourage these...")
 			break
@@ -229,12 +231,11 @@ def isRedditorValid(redditor):
 	except:
 		return False
 			
-def isStringInt(intString):
-    try: 
-        int(intString)
-        return True
-    except ValueError:
-        return False
+def isStringFloat(amountString):
+	try:
+		return (amountString.replace('.','',1).isdigit() is True)
+	except ValueError:
+		return False
 
 #  Attempt to comment about the tip failure, and save off the comment if we fail to post it
 def CommentReply_TipFailure(comment, commentTemplate, targetUsername, firstTry=True):
