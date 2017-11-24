@@ -475,7 +475,7 @@ def processSingleDeposit(username):
 	return True
 
 def getUserBalance(username):
-	RegisterUser(username, False)
+	RegisterUser(username, False, True)
 	return userBalances[username]
 	
 def addToUserBalance(username, amount, export=True):
@@ -505,12 +505,15 @@ def isUserRegistered(username):
 	else:
 		return False
 		
-def RegisterUser(username, isMessage):
+def RegisterUser(username, isMessage, quickReg=False):
 	alreadyRegistered = False
 	if (isUserRegistered(username)):
 		alreadyRegistered = True
 	else:
 		CreateUserData(username)
+		
+	if quickReg:
+		return True
 	
 	#  PM the registered user with their balance and deposit address. Mention if they were already registered and attempted to register by PM
 	balance = getUserBalance(username)
