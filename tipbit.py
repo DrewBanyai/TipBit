@@ -448,8 +448,8 @@ def processDeposits():
 def processSingleDeposit(username):
 	senderKey = Key(userPrivateKeys[username])
 	senderAddress = senderKey.address
-	depositBalance = senderKey.get_balance()
-	secondaryCheck = GetAddressBalance(senderAddress)
+	depositBalance = int(senderKey.get_balance())
+	secondaryCheck = int(currency_to_satoshi_cached(GetAddressBalance(senderAddress), 'btc'))
 	
 	#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
 	if ((secondaryCheck != depositBalance) or (depositBalance <= botSpecificData.MINIMUM_DEPOSIT)): return False
