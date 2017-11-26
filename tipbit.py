@@ -99,7 +99,7 @@ def mainLoop():
 					print('SSL error on processing of unread messages and comments...')
 				except:
 					print('Unknown exception on processing of unread messages and comments...')
-		except prawcore.exceptions.RequestException:
+		except RequestException:
 			print('RequestException on processing of unread messages and comments...')
 		
 		#  If the unread mention count has changed, print a message
@@ -166,12 +166,13 @@ def processComments():
 	#  Recheck the comment for the bot name to ensure it still exists (could be a comment reply)
 	for comment in unreadMentions:
 		#  Ensure the comment mention was in the test sub. Can't have this thing leaking...
-		if (comment.subreddit in botSpecificData.BOT_TEST_SUBS):
+		subName = comment.subreddit.display_name.lower()
+		if (subName in botSpecificData.BOT_TEST_SUBS):
 			#  Process the comment if we're mentioned and it's a qualified user
-			if (((botSpecificData.BOT_USERNAME + ' ') in comment.body.lower()) and (comment.author.name.lower() in userBalances)):
+			if (((botSpecificData.BOT_USERNAME + ' ') in comment.body.lower())):
 				processSingleComment(comment)
 		else:
-			print('We received a comment in another subreddit: {}'.format(comment.subreddit))
+			print('We received a comment in another subreddit: {}'.format(subName))
 		unreadMentions.remove(comment)
 
 def processSingleComment(comment):
@@ -180,6 +181,11 @@ def processSingleComment(comment):
 	
 	#  Grab the author's name to use for tipping and registration purposes
 	senderName = comment.author.name.lower()
+	
+	if (senderName not in userBalances):
+		CommentReply_TipFailure(comment, messageTemplates.TIP_FAILURE_UNREGISTERED_USER, '')
+		print('User {} failed to tip (sender not registered)'.format(senderName))
+		return False
 	
 	#  Ensure that either the bot username is the beginning of the comment, or there is a space before it
 	separate_around_bot = commentBody.partition(botSpecificData.BOT_USERNAME + ' ')
@@ -197,6 +203,7 @@ def processSingleComment(comment):
 				#  TIP FAILURE: Reddit account could not be found through username specified in comment
 				CommentReply_TipFailure(comment, messageTemplates.USERNAME_IS_REMOVED_OR_BANNED_TEXT, targetName)
 				print('Failed to tip {} (non-existent account)'.format(targetName))
+				continue
 			else: #  Redditor is valid
 				#  Ensure that the next string value is a number
 				separate_around_amount = separate_around_target[2].partition(' ')
@@ -204,22 +211,26 @@ def processSingleComment(comment):
 					separate_around_amount = separate_around_amount[0].partition('\n')
 					
 				amountString = separate_around_amount[0]
-				if not isStringFloat(amountString):
+				amountSatoshi = getSatoshiFromAmountString(amountString)
+				if amountSatoshi == -1:
 					#  FAILED TIP: Amount not specified correctly in comment
 					CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_SPECIFIED_TEXT, targetName)
 					print('Failed to tip {} (unspecified amount: {})'.format(targetName, amountString))
+					continue
 				else:
-					amountSatoshi = int(currency_to_satoshi_cached(amountString, 'mbtc'))
 					RegisterUser(senderName, False)
 					if (not isBalanceSufficient(senderName, amountSatoshi)):
 						#  FAILED TIP: Amount not available in user balance
 						CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_AVAILABLE_TEXT, targetName)
 						print('Failed to tip {} (insufficient balance)'.format(targetName))
+						continue
 					else:
 						#  SUCCESSFUL TIP
-						processSingleTip(senderName, targetName, amountSatoshi)
-						CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, satoshi_to_currency(amountSatoshi, 'usd'), botSpecificData.BOT_INTRO_LINK)
+						if (senderName is not targetName):
+							processSingleTip(senderName, targetName, amountSatoshi)
 						print('Successful tip: {} -> {} ({})'.format(senderName, targetName, amountString))
+						CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, satoshi_to_currency(amountSatoshi, 'usd'), botSpecificData.BOT_INTRO_LINK)
+						continue
 		else:
 			print("Caught a comment reply with no mention. We should discourage these...")
 			break
@@ -236,6 +247,17 @@ def isStringFloat(amountString):
 		return (amountString.replace('.','',1).isdigit() is True)
 	except ValueError:
 		return False
+		
+def getSatoshiFromAmountString(amountString):
+	if (isStringFloat(amountString)):
+		return int(currency_to_satoshi_cached(amountString, 'mbtc'))
+	if (amountString[0] == '$'):
+		amountString = amountString[1:]
+		if (isStringFloat(amountString)):
+			return int(currency_to_satoshi_cached(amountString, 'usd'))
+		
+	return -1
+		
 
 #  Attempt to comment about the tip failure, and save off the comment if we fail to post it
 def CommentReply_TipFailure(comment, commentTemplate, targetUsername, firstTry=True):

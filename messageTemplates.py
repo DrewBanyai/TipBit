@@ -1,4 +1,5 @@
 SUCCESSFUL_TIP_TEXT = 'Tip Successful: {} -> {} ({} mBTC)\n\nAt current exchange rates, that is around {} USD.\n\n[^What ^is ^this? ^How ^can ^I ^use ^this ^tip ^bot?]({})'
+TIP_FAILURE_UNREGISTERED_USER = 'It looks like you\'re attempting to tip, but you aren\'t registered with TipBit yet!\n\n[To register, send me a message with "Register" as the subject line.](https://www.reddit.com/message/compose?to=tip_bit&subject=Register&message=Please%20register%20my%20reddit%20account)'
 USERNAME_IS_REMOVED_OR_BANNED_TEXT = 'It looks like you attempted to tip {} but that user is either non-existent or banned! Please note, the comment format should be "/u/tip_bit TARGET_USER AMOUNT_IN_mBTC". Please try again!'
 AMOUNT_NOT_SPECIFIED_TEXT = 'It looks like you attempted to tip {} but the amount was not correctly formatted. Please leave out anything but the number. For example "35" or "0.1" are fine, but "$1" or "0.001mBTC" are not.\n\nPlease try again!'
 AMOUNT_NOT_AVAILABLE_TEXT = 'It looks like you attempted to tip {} more than your current balance. Please try again!'
