@@ -83,50 +83,53 @@ def mainLoop():
 	lastUnsentCheckTime = time.time()
 
 	while (True):
-		#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
-		global allUnread
-		allUnread = reddit.inbox.unread(limit=5)
 		try:
-			for item in allUnread:
-				try:
-					if isinstance(item, Message):
-						unreadMessages.append(item)
-					elif isinstance(item, Comment):
-						unreadMentions.append(item)
-				except urllib3.exceptions.ReadTimeoutError:
-					print('ReadTimeoutError on processing of unread messages and comments...')
-				except ssl.SSLError:
-					print('SSL error on processing of unread messages and comments...')
-				except:
-					print('Unknown exception on processing of unread messages and comments...')
-		except RequestException:
-			print('RequestException on processing of unread messages and comments...')
-		
-		#  If the unread mention count has changed, print a message
-		global unreadMentionCount
-		global unreadMessageCount
-		global unsentCommentCount
-		if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
-			print("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
-		unreadMentionCount = len(unreadMentions)
-		unreadMessageCount = len(unreadMessages)
-		unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
-		
-		#  Attempt to re-post comments that failed to post if at least 5 seconds has gone by
-		if (time.time() > lastUnsentCheckTime):
-			lastUnsentCheckTime = time.time() + 5
-			processUnsent()
-		
-		#  Check the next 5 messages
-		processMessages()
-		
-		#  Check the next 5 comments
-		processComments()
-		
-		#  Check for any balance deposits if at least 120 seconds has gone by
-		if (time.time() > lastTime):
-			lastTime = time.time() + 120.0
-			processDeposits()
+			#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
+			global allUnread
+			allUnread = reddit.inbox.unread(limit=5)
+			try:
+				for item in allUnread:
+					try:
+						if isinstance(item, Message):
+							unreadMessages.append(item)
+						elif isinstance(item, Comment):
+							unreadMentions.append(item)
+					except urllib3.exceptions.ReadTimeoutError:
+						print('ReadTimeoutError on processing of unread messages and comments...')
+					except ssl.SSLError:
+						print('SSL error on processing of unread messages and comments...')
+					except:
+						print('Unknown exception on processing of unread messages and comments...')
+			except RequestException:
+				print('RequestException on processing of unread messages and comments...')
+			
+			#  If the unread mention count has changed, print a message
+			global unreadMentionCount
+			global unreadMessageCount
+			global unsentCommentCount
+			if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
+				print("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
+			unreadMentionCount = len(unreadMentions)
+			unreadMessageCount = len(unreadMessages)
+			unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
+			
+			#  Attempt to re-post comments that failed to post if at least 5 seconds has gone by
+			if (time.time() > lastUnsentCheckTime):
+				lastUnsentCheckTime = time.time() + 5
+				processUnsent()
+			
+			#  Check the next 5 messages
+			processMessages()
+			
+			#  Check the next 5 comments
+			processComments()
+			
+			#  Check for any balance deposits if at least 120 seconds has gone by
+			if (time.time() > lastTime):
+				lastTime = time.time() + 120.0
+				processDeposits()
+		except ConnectionError:
+			print("ConnectionError occurred during processing...")
 		
 		#  Sleep for 3 seconds (in 60 increments so we can check for escape key to close program)
 		for x in range(0, 60):
