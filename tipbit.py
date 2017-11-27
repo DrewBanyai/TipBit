@@ -101,7 +101,7 @@ def mainLoop():
 					except:
 						print('Unknown exception on processing of unread messages and comments...')
 			except RequestException:
-				print('RequestException on processing of unread messages and comments...')
+				print('RequestException on processing of unreads (likely a timeout / connection error)')
 			
 			#  If the unread mention count has changed, print a message
 			global unreadMentionCount
