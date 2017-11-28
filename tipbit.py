@@ -254,6 +254,8 @@ def isStringFloat(amountString):
 def getSatoshiFromAmountString(amountString):
 	if (isStringFloat(amountString)):
 		return int(currency_to_satoshi_cached(amountString, 'mbtc'))
+	if (amountString in botSpecificData.AMOUNT_DICTIONARY):
+		return getSatoshiFromAmountString(botSpecificData.AMOUNT_DICTIONARY[amountString])
 	if (amountString[0] == '$'):
 		amountString = amountString[1:]
 		if (isStringFloat(amountString)):
