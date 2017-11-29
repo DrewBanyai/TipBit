@@ -41,7 +41,8 @@ userDepositAddresses = {
 	# 'exampleUserName' : 'EXAMPLE_ADDRESS'
 	}
 
-#  Initialize the empty private key data dictionary
+#  Initialize the Key() array and the empty private key data dictionary
+userKeyStructs = {}
 userPrivateKeys = {
 	# 'exampleUserName' : 'EXAMPLE_PRIVATE_KEY'
 	}
@@ -126,8 +127,8 @@ def mainLoop():
 			
 			#  Check for any balance deposits if at least 120 seconds has gone by
 			if (time.time() > lastTime):
-				lastTime = time.time() + 120.0
 				processDeposits()
+				lastTime = time.time() + 120.0 # This should be after processDeposits to ensure the time it takes to process is not subtracted from the 120
 		except ConnectionError:
 			print("ConnectionError occurred during processing...")
 		
@@ -469,18 +470,27 @@ def GetAddressBalance(address):
 
 #  Check the list of user deposit addresses
 def processDeposits():
-	for key in userPrivateKeys:
+	for key in userKeyStructs:
 		processSingleDeposit(key)
 
 #  If the deposit address for the given key has above the minimum balance of bitcoin in it, sweep the balance to storage and update the user's balance
 def processSingleDeposit(username):
-	senderKey = Key(userPrivateKeys[username])
-	senderAddress = senderKey.address
+	senderKey = userKeyStructs[username]
+	senderAddress = userDepositAddresses[username]
+	#print('Checking address {}: ('.format(senderAddress), end=''),
 	depositBalance = int(senderKey.get_balance())
+	#print('{} | '.format(depositBalance), end=''),
 	secondaryCheck = int(currency_to_satoshi_cached(GetAddressBalance(senderAddress), 'btc'))
+	#print('{})'.format(secondaryCheck))
 	
 	#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
-	if ((secondaryCheck != depositBalance) or (depositBalance <= botSpecificData.MINIMUM_DEPOSIT)): return False
+	if (depositBalance <= botSpecificData.MINIMUM_DEPOSIT):
+		return False
+	
+	#  If the two checks have different values, display an error and return out (this means money is transferring)
+	if (depositBalance != secondaryCheck):
+		print('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck))
+		return False
 	
 	depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
 	print('Deposit detected in {}\'s account: {} mBTC'.format(username, depositBalanceMBTC))
@@ -561,8 +571,8 @@ def RegisterUser(username, isMessage, quickReg=False):
 #  Create the basic user, then export all of the data
 def CreateUserData(username):
 	userBalances[username] = 0
-	key = Key()
-	userPrivateKeys[username] = key.to_wif()
+	userKeyStructs[username] = Key()
+	userPrivateKeys[username] = userKeyStructs[username].to_wif()
 	userDepositAddresses[username] = key.address
 	ExportUserBalancesJson()
 	ExportUserDepositAddressesJson()
@@ -600,9 +610,10 @@ def ExportUserPrivateKeysJson():
 def ImportUserPrivateKeysJson():
 	if os.path.isfile("UserPrivateKeys.json"):
 		with open("UserPrivateKeys.json", "rb") as f:
-			keys = json.load(f)
-			for key in keys:
-				userPrivateKeys[key] = keys[key]
+			usersToKeys = json.load(f)
+			for username in usersToKeys:
+				userPrivateKeys[username] = usersToKeys[username]
+				userKeyStructs[username] = Key(userPrivateKeys[username])
 
 if __name__ == '__main__':
     main()
