@@ -573,7 +573,7 @@ def CreateUserData(username):
 	userBalances[username] = 0
 	userKeyStructs[username] = Key()
 	userPrivateKeys[username] = userKeyStructs[username].to_wif()
-	userDepositAddresses[username] = key.address
+	userDepositAddresses[username] = userKeyStructs[username].address
 	ExportUserBalancesJson()
 	ExportUserDepositAddressesJson()
 	ExportUserPrivateKeysJson()
