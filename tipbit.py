@@ -80,8 +80,9 @@ def ImportAllUserData():
 	ImportUserPrivateKeysJson()
 		
 def mainLoop():
-	lastTime = time.time()
+	lastSolvencyCheckTime = time.time()
 	lastUnsentCheckTime = time.time()
+	lastDepositCheckTime = time.time()
 
 	while (True):
 		try:
@@ -125,10 +126,16 @@ def mainLoop():
 			#  Check the next 5 comments
 			processComments()
 			
+			#  Check for solvency if at least 240 seconds has gone by
+			if (time.time() > lastSolvencyCheckTime):
+				checkSolvency()
+				lastSolvencyCheckTime = time.time() + 240.0
+				
 			#  Check for any balance deposits if at least 120 seconds has gone by
-			if (time.time() > lastTime):
+			if (time.time() > lastDepositCheckTime):
 				processDeposits()
-				lastTime = time.time() + 120.0 # This should be after processDeposits to ensure the time it takes to process is not subtracted from the 120
+				lastDepositCheckTime = time.time() + 120.0 # This should be after processDeposits to ensure the time it takes to process is not subtracted from the 120
+				
 		except ConnectionError:
 			print("ConnectionError occurred during processing...")
 		
@@ -360,10 +367,11 @@ def ProcessWithdraw(message, trueWithdrawal):
 	messageSplit = messageBody.partition(' ')
 	withdrawalAddress = messageSplit[0]
 	amountStringMBTC = messageSplit[2].upper()
+	userBalance = getUserBalance(username)
 	
 	#  Allow the user to put ALL in as a value, and take the entire balance in that case
 	if (amountStringMBTC == "ALL"):
-		amountStringMBTC = str(getUserBalance(username))
+		amountStringMBTC = satoshi_to_currency(userBalance, 'mbtc')
 	
 	#  Check that the address and amount are formatted correctly
 	if ((GetAddressIsValid(withdrawalAddress) is False) or (amountStringMBTC.replace('.','',1).isdigit() is False)):
@@ -372,16 +380,17 @@ def ProcessWithdraw(message, trueWithdrawal):
 		return False
 		
 	#  Check that the amount is above or equal to the minimum withdrawal
-	amount = currency_to_satoshi_cached(amountString, 'mbtc')
+	amount = currency_to_satoshi_cached(amountStringMBTC, 'mbtc')
 	amountMBTC = satoshi_to_currency(amount, 'mbtc')
 	if (amount < botSpecificData.MINIMUM_WITHDRAWAL):
 		print('/u/{} failed to withdraw \'{}\' mBTC (below minimum withdrawal value)'.format(username, amountMBTC))
-		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, botSpecificData.MINIMUM_WITHDRAWAL))
+		minimumWithdrawal = currency_to_satoshi_cached(botSpecificData.MINIMUM_WITHDRAWAL, 'mbtc')
+		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, minimumWithdrawal))
 		return False
 		
 	#  Check that the amount requested is in the user balance
-	if (amount > getUserBalance(username)):
-		balanceMBTC = satoshi_to_currency(getUserBalance(username))
+	if (amount > userBalance):
+		balanceMBTC = satoshi_to_currency(userBalance, 'mbtc')
 		print('/u/{} failed to withdraw \'{}\' mBTC (insufficient balance of {})'.format(username, amountMBTC, balanceMBTC))
 		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_LOW_BALANCE_MESSAGE_TEXT.format(amountMBTC, balanceMBTC))
 		return False
@@ -404,12 +413,13 @@ def ProcessWithdraw(message, trueWithdrawal):
 		return False
 	
 	#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
+	print('Sending {} satoshis and paying {} satoshis for the fee'.format(amount, estimatedFee))
 	if SendBitcoin(storageKey, withdrawalAddress, amount, estimatedFee, botSpecificData.WITHDRAWAL_FEE_PER_BYTE, "Basic Deposit"):
 		amountMinusFees = amount - estimatedFee
-		amountMinusFeesMBTC = satoshi_to_currency(amountMinusFees, 'mbtc')
+		amountMinusFeeMBTC = satoshi_to_currency(amountMinusFees, 'mbtc')
 		addToUserBalance(username, amount * -1)
 		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		print('{} withdraw {} mBTC ({} + {} fee)'.format(username, amountMBTC, amountMinusFeesMBTC, estimatedFeeMBTC))
+		print('{} withdraw {} mBTC ({} + {} fee)'.format(username, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
 		reddit.redditor(username).message('Your withdrawal was successful!', messageTemplates.USER_SUCCESS_WITHDRAW_MESSAGE_TEXT.format(amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC, amountMBTC, balanceMBTC, storageTX))
 		
 	return True
@@ -429,7 +439,8 @@ def DetermineFee(senderKey, destinationAddress, amount, satoshisPerByte):
 def SendBitcoin(senderKey, targetAddress, amount, estimatedFee, satoshisPerByte, transactionReason):
 	amountMinusFee = amount - estimatedFee
 	try:
-		tx = senderKey.send([(targetAddress, amountMinusFee, 'satoshi')], satoshisPerByte, targetAddress)
+		print('Sending {} satoshis'.format(amountMinusFee))
+		tx = senderKey.send([(targetAddress, amountMinusFee, 'satoshi')], satoshisPerByte, STORAGE_ADDRESS)
 		print('Transaction successful: {}'.format(tx))
 		return tx
 	except Exception as ex:
@@ -472,6 +483,16 @@ def GetAddressBalance(address):
 def processDeposits():
 	for key in userKeyStructs:
 		processSingleDeposit(key)
+		
+#  Check for solvency (add up tip balances, check against main storage
+def checkSolvency():
+	storageBalance = int(storageKey.get_balance())
+	allTipBalanceTotal = 0
+	for user in userBalances:
+		allTipBalanceTotal += userBalances[user]
+	
+	if (storageBalance != allTipBalanceTotal):
+		print('Solvency mismatch in Storage and Tip Balances: [{} : {}]'.format(storageBalance, allTipBalanceTotal))
 
 #  If the deposit address for the given key has above the minimum balance of bitcoin in it, sweep the balance to storage and update the user's balance
 def processSingleDeposit(username):
@@ -480,7 +501,7 @@ def processSingleDeposit(username):
 	#print('Checking address {}: ('.format(senderAddress), end=''),
 	depositBalance = int(senderKey.get_balance())
 	#print('{} | '.format(depositBalance), end=''),
-	secondaryCheck = int(currency_to_satoshi_cached(GetAddressBalance(senderAddress), 'btc'))
+	secondaryCheck = int(GetAddressBalance(senderAddress))
 	#print('{})'.format(secondaryCheck))
 	
 	#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
