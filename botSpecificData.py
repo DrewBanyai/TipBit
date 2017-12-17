@@ -4,6 +4,19 @@ BOT_USERNAME = 'ExampleBotName'
 #  Array of subreddits which the bot should be allowed to comment in (does not reply to comments in other subs)
 BOT_TEST_SUBS = ['ExampleSubredditName']
 
+#  Dictionary of terms for amounts
+AMOUNT_DICTIONARY = { 
+	"pocketchange": "$0.5",
+	"icecream": "$1",
+	"coffee": "$3",
+	"dinner": "$8",
+	"dollar": "$1",
+	"fiver": "$5",
+	"tenspot": "$10",
+	"jackson": "$20",
+	"benjamin": "$100",
+	}
+
 #  Link to the page which explains how to use the bot
 BOT_INTRO_LINK = 'http://example.explanation.URL'
 
