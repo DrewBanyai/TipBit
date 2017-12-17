@@ -15,6 +15,9 @@ import time
 import pickle
 import json
 import msvcrt
+import urllib3
+import ssl
+import threading
 
 # PRAW IMPORTS
 import praw
@@ -35,10 +38,16 @@ STORAGE_ADDRESS = storageKey.address
 userBalances = {
 	# 'exampleUserName' : 100000000,
 	}
+userBalancesCopy = {} # Used for the solvency check thread to avoid race conditions
 
 #  Initialize the empty user deposit addresses dictionary
 userDepositAddresses = {
 	# 'exampleUserName' : 'EXAMPLE_ADDRESS'
+	}
+userDepositAddressesCopy = {} # Used for the deposit check thread to avoid race conditions
+
+userDepositTransactions = {
+	# 'exampleTX' : "username"
 	}
 
 #  Initialize the Key() array and the empty private key data dictionary
@@ -52,9 +61,11 @@ unreadMessageCount = 0
 unreadMentions = []
 unreadMentionCount = 0
 allUnread = []
+markedRead = []
 unsentTipFailures = []
 unsentTipSuccesses = []
 unsentCommentCount = 0
+lastSolvencyDiff = 0
 
 def main():
 	print('Bot ID: {}'.format(reddit.user.me()))
@@ -78,46 +89,39 @@ def ImportAllUserData():
 	#  Import the list of all user private keys
 	print("Importing user private keys...")
 	ImportUserPrivateKeysJson()
+	
+	#  Import the list of all user deposit transactions
+	print("Importing user deposit transactions...")
+	ImportUserDepositTransactionsJson()
 		
 def mainLoop():
-	lastSolvencyCheckTime = time.time()
 	lastUnsentCheckTime = time.time()
-	lastDepositCheckTime = time.time()
+	lastSolvencyCheckTime = time.time() + 240.0
+	lastDepositCheckTime = time.time() + 120.0
+	
+	global userBalancesCopy
+	userBalancesCopy = userBalances.copy()
+	solvencyThread = threading.Thread(target=checkSolvency)
+	solvencyThread.daemon = True
+	solvencyThread.start()
+	
+	global userDepositAddressesCopy
+	userDepositAddressesCopy = userDepositAddresses.copy()
+	depositsThread = threading.Thread(target=processDeposits)
+	depositsThread.daemon = True
+	depositsThread.start()
 
 	while (True):
 		try:
-			#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
-			global allUnread
-			allUnread = reddit.inbox.unread(limit=5)
-			try:
-				for item in allUnread:
-					try:
-						if isinstance(item, Message):
-							unreadMessages.append(item)
-						elif isinstance(item, Comment):
-							unreadMentions.append(item)
-					except urllib3.exceptions.ReadTimeoutError:
-						print('ReadTimeoutError on processing of unread messages and comments...')
-					except ssl.SSLError:
-						print('SSL error on processing of unread messages and comments...')
-					except:
-						print('Unknown exception on processing of unread messages and comments...')
-			except RequestException:
-				print('RequestException on processing of unreads (likely a timeout / connection error)')
+			#  Collect all unread mentions and messages
+			gatherUnreads()
 			
-			#  If the unread mention count has changed, print a message
-			global unreadMentionCount
-			global unreadMessageCount
-			global unsentCommentCount
-			if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
-				print("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
-			unreadMentionCount = len(unreadMentions)
-			unreadMessageCount = len(unreadMessages)
-			unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
+			#  Display any change in the current unread or unsent count
+			displayUnreadUnsentCount()
 			
-			#  Attempt to re-post comments that failed to post if at least 5 seconds has gone by
+			#  Attempt to re-post comments that failed to post if at least 10 seconds has gone by
 			if (time.time() > lastUnsentCheckTime):
-				lastUnsentCheckTime = time.time() + 5
+				lastUnsentCheckTime = time.time() + 10.0
 				processUnsent()
 			
 			#  Check the next 5 messages
@@ -128,21 +132,72 @@ def mainLoop():
 			
 			#  Check for solvency if at least 240 seconds has gone by
 			if (time.time() > lastSolvencyCheckTime):
-				checkSolvency()
+				if (not solvencyThread.isAlive()):
+					userBalancesCopy = userBalances.copy()
+					solvencyThread = threading.Thread(target=checkSolvency)
+					solvencyThread.daemon = True
+					solvencyThread.start()
 				lastSolvencyCheckTime = time.time() + 240.0
 				
 			#  Check for any balance deposits if at least 120 seconds has gone by
 			if (time.time() > lastDepositCheckTime):
-				processDeposits()
-				lastDepositCheckTime = time.time() + 120.0 # This should be after processDeposits to ensure the time it takes to process is not subtracted from the 120
+				if (not depositsThread.isAlive()):
+					userDepositAddressesCopy = userDepositAddresses.copy()
+					depositsThread = threading.Thread(target=processDeposits)
+					depositsThread.daemon = True
+					depositsThread.start()
+				lastDepositCheckTime = time.time() + 120.0
 				
 		except ConnectionError:
 			print("ConnectionError occurred during processing...")
+		except RequestException:
+			print('RequestException on processing of unreads (likely a timeout / connection error)')
 		
 		#  Sleep for 3 seconds (in 60 increments so we can check for escape key to close program)
 		for x in range(0, 60):
 			checkForEscape()
 			time.sleep(0.05)
+			
+def gatherUnreads():
+	#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
+	global allUnread
+	global markedRead
+	allUnread = reddit.inbox.unread(limit=1)
+	try:
+		for item in allUnread:
+			if (item in markedRead):
+				print("reddit.inbox.unread is returning items after they're marked read... something is wrong")
+				continue
+			try:
+				if isinstance(item, Message):
+					unreadMessages.append(item)
+				elif isinstance(item, Comment):
+					unreadMentions.append(item)
+			except urllib3.exceptions.ReadTimeoutError:
+				print('ReadTimeoutError on processing of unread messages and comments...')
+			except ssl.SSLError:
+				print('SSL error on processing of unread messages and comments...')
+			except Exception as e:
+				print(e)
+				print('Unknown exception on processing of unread messages and comments...')
+	except RequestException:
+		print('RequestException on processing of unreads (likely a timeout / connection error)')
+	
+	for item in unreadMessages: markedRead.append(item)
+	for item in unreadMentions: markedRead.append(item)
+	reddit.inbox.mark_read(unreadMessages)
+	reddit.inbox.mark_read(unreadMentions)
+		
+def displayUnreadUnsentCount():
+	#  If the unread mention count has changed, print a message
+	global unreadMentionCount
+	global unreadMessageCount
+	global unsentCommentCount
+	if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
+		print("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
+	unreadMentionCount = len(unreadMentions)
+	unreadMessageCount = len(unreadMessages)
+	unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
 
 def checkForEscape():
 	#  If the ESCAPE key is detected within the 3 seconds the bot sleeps per loop, the program exits cleanly
@@ -151,8 +206,6 @@ def checkForEscape():
 		exit()
 
 def processMessages():
-	reddit.inbox.mark_read(unreadMessages)
-	
 	#  Hunt through the different subject lines we respond to. If it is anything else, toss it and mention it in console
 	for message in unreadMessages:
 		messageSubject = message.subject.upper()
@@ -172,23 +225,20 @@ def processMessages():
 		unreadMessages.remove(message)
 
 def processComments():
-	reddit.inbox.mark_read(unreadMentions)
-
 	#  Recheck the comment for the bot name to ensure it still exists (could be a comment reply)
 	for comment in unreadMentions:
-		#  Ensure the comment mention was in the test sub. Can't have this thing leaking...
+		#  Ensure the comment mention was in the allowed subs. Can't have this thing leaking...
 		subName = comment.subreddit.display_name.lower()
 		if (subName in botSpecificData.BOT_TEST_SUBS):
-			#  Process the comment if we're mentioned and it's a qualified user
+			#  Process the comment if the bot is mentioned
 			if (((botSpecificData.BOT_USERNAME + ' ') in comment.body.lower())):
-				processSingleComment(comment)
+				processSingleComment(comment, comment.body.lower())
 		else:
 			print('We received a comment in another subreddit: {}'.format(subName))
 		unreadMentions.remove(comment)
 
-def processSingleComment(comment):
-	#  Separate out the comment body so we can work through it, possibly reading multiple tips
-	commentBody = comment.body.lower()
+def processSingleComment(comment, commentBody):
+	#  Note: This function allows you to pass in an altered comment body, which will then get processed. The comment reference is only used to reply onto
 	
 	#  Grab the author's name to use for tipping and registration purposes
 	senderName = comment.author.name.lower()
@@ -486,18 +536,23 @@ def processDeposits():
 		
 #  Check for solvency (add up tip balances, check against main storage
 def checkSolvency():
+	global userBalancesCopy
+	global lastSolvencyDiff
 	storageBalance = int(storageKey.get_balance())
 	allTipBalanceTotal = 0
-	for user in userBalances:
-		allTipBalanceTotal += userBalances[user]
+	for user in userBalancesCopy:
+		allTipBalanceTotal += userBalancesCopy[user]
 	
-	if (storageBalance != allTipBalanceTotal):
-		print('Solvency mismatch in Storage and Tip Balances: [{} : {}]'.format(storageBalance, allTipBalanceTotal))
+	solvencyDiff = allTipBalanceTotal - storageBalance
+	if (solvencyDiff != lastSolvencyDiff):
+		lastSolvencyDiff = solvencyDiff
+		print('Solvency report: Tip Balances [{}] - Storage [{}] = {}'.format(allTipBalanceTotal, storageBalance, lastSolvencyDiff))
 
 #  If the deposit address for the given key has above the minimum balance of bitcoin in it, sweep the balance to storage and update the user's balance
 def processSingleDeposit(username):
+	global userDepositAddressesCopy
 	senderKey = userKeyStructs[username]
-	senderAddress = userDepositAddresses[username]
+	senderAddress = userDepositAddressesCopy[username]
 	#print('Checking address {}: ('.format(senderAddress), end=''),
 	depositBalance = int(senderKey.get_balance())
 	#print('{} | '.format(depositBalance), end=''),
@@ -511,6 +566,27 @@ def processSingleDeposit(username):
 	#  If the two checks have different values, display an error and return out (this means money is transferring)
 	if (depositBalance != secondaryCheck):
 		print('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck))
+		return False
+	
+	#  Gather a list of unprocessed deposit transactions
+	newDepositList = {}
+	try:
+		depositTransactionList = senderKey.get_transactions()
+		if (depositTransactionList is ""):
+			print("Could not load transaction list")
+			return False
+		
+		for tx in depositTransactionList:
+			if (tx in depositTransactionList):
+				break
+			else:
+				newDepositList[tx] = depositTransactionList[tx]
+	except json.decoder.JSONDecodeError:
+		print("JSON decoding error when attempting to load transactions for {}".format(username))
+		return False
+	
+	#  If we have no new deposits, we're just detecting already processed deposits and can ignore them
+	if (len(newDepositList) == 0):
 		return False
 	
 	depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
@@ -529,6 +605,8 @@ def processSingleDeposit(username):
 		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
 		print('Deposit successfully sent to storage: {} mBTC'.format(newDepositDeltaMBTC))
 		reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
+		AddUserDepositTransaction(storageTX, username);
+		
 	
 	#  Return True so that we know to remove this deposit from the queue
 	return True
@@ -599,6 +677,11 @@ def CreateUserData(username):
 	ExportUserDepositAddressesJson()
 	ExportUserPrivateKeysJson()
 	
+#  Add user transaction
+def AddUserDepositTransaction(storageTX, username):
+	userDepositTransactions[storageTX] = username
+	ExportUserDepositTransactionsJson()
+	
 ##  BALANCES EXPORT AND IMPORT
 def ExportUserBalancesJson():
 	with open('UserBalances.json', 'w') as f:
@@ -620,8 +703,8 @@ def ImportUserDepositAddressesJson():
 	if os.path.isfile("UserDepositAddresses.json"):
 		with open("UserDepositAddresses.json", "rb") as f:
 			addresses = json.load(f)
-			for address in addresses:
-				userDepositAddresses[address] = addresses[address]	
+			for username in addresses:
+				userDepositAddresses[username] = addresses[username]	
 	
 ##  PRIVATE KEY EXPORT AND IMPORT
 def ExportUserPrivateKeysJson():
@@ -635,6 +718,18 @@ def ImportUserPrivateKeysJson():
 			for username in usersToKeys:
 				userPrivateKeys[username] = usersToKeys[username]
 				userKeyStructs[username] = Key(userPrivateKeys[username])
+				
+##  USER DEPOSIT TRANSACTIONS EXPORT AND IMPORT
+def ExportUserDepositTransactionsJson():
+	with open('userDepositTransactions.json', 'w') as f:
+		json.dump(userDepositTransactions, f)
+
+def ImportUserDepositTransactionsJson():
+	if os.path.isfile("userDepositTransactions.json"):
+		with open("userDepositTransactions.json", "rb") as f:
+			transactionsToUsers = json.load(f)
+			for username in transactionsToUsers:
+				userDepositTransactions[username] = transactionsToUsers[username]
 
 if __name__ == '__main__':
     main()
