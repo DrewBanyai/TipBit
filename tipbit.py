@@ -18,6 +18,7 @@ import msvcrt
 import urllib3
 import ssl
 import threading
+from tkinter import *
 
 # PRAW IMPORTS
 import praw
@@ -65,54 +66,106 @@ markedRead = []
 unsentTipFailures = []
 unsentTipSuccesses = []
 unsentCommentCount = 0
+
+allTipBalanceTotal = 0
+storageBalance = 0
+solvencyDiff = 0
 lastSolvencyDiff = 0
 
-def main():
-	print('Bot ID: {}'.format(reddit.user.me()))
+#  Tkinter window data
+window = Tk()
+window.geometry('800x600')
+window.resizable(width=False, height=False)
+window.iconbitmap('TipBitIcon.ico')
+window.title("TipBit - The Reddit Bitcoin Tip Bot")
+canvas = Canvas(window, width=800, height=600)
+canvas.pack()
 
+#   GUI Editable Objects
+tipBalanceStringVar = StringVar()
+storageBalanceStringVar = StringVar()
+tipStorageDiffStringVar = StringVar()
+tipBalanceStringVar.set("tip_balance")
+storageBalanceStringVar.set("storage_balance")
+tipStorageDiffStringVar.set("tip_storage_difference")
+eventListbox = Listbox(window, width=800, height=560)
+eventListbox.place(x=0, y=40, anchor='nw')
+
+
+def main():
+	AddEventString('Bot ID: {}'.format(reddit.user.me()), False)
+
+	#  Set up the GUI
+	SetupGUI()
+	
 	#  Import all user data
 	ImportAllUserData()
 	
 	#  Initiate the main loop function
-	print("Initiating main loop")
+	AddEventString("Initiating main loop", False)
 	mainLoop()
+	
+def SetupGUI():
+	Label(window, text='TIP BALANCE', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=133, y=10, anchor='center')
+	Label(window, textvariable=tipBalanceStringVar, anchor='center', justify=CENTER).place(x=133, y=28, anchor='center')
+	Label(window, text='STORAGE BALANCE', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=400, y=10, anchor='center')
+	Label(window, textvariable=storageBalanceStringVar, anchor='center', justify=CENTER).place(x=400, y=28, anchor='center')
+	Label(window, text='DIFFERENCE', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=666, y=10, anchor='center')
+	Label(window, textvariable=tipStorageDiffStringVar, anchor='center', justify=CENTER).place(x=666, y=28, anchor='center')
+	canvas.create_line(0, 40, 800, 40)
+	canvas.create_line(266, 0, 266, 40)
+	canvas.create_line(533, 0, 533, 40)
+	
+def UpdateGUI():
+	tipBalanceStringVar.set(allTipBalanceTotal)
+	storageBalanceStringVar.set(storageBalance)
+	tipStorageDiffStringVar.set(solvencyDiff)
+	
+def AddEventString(eventString, showInConsole=True):
+	if showInConsole:
+		global eventListbox
+		eventListbox.insert(END, eventString)
+	print(eventString)
 	
 def ImportAllUserData():
 	#  Import the list of all user balances
-	print("Importing user balances...")
+	AddEventString("Importing user balances...", False)
 	ImportUserBalancesJson()
 	
 	#  Import the list of all user deposit addresses
-	print("Importing user deposit addresses...")
+	AddEventString("Importing user deposit addresses...", False)
 	ImportUserDepositAddressesJson()
 	
 	#  Import the list of all user private keys
-	print("Importing user private keys...")
+	AddEventString("Importing user private keys...", False)
 	ImportUserPrivateKeysJson()
 	
 	#  Import the list of all user deposit transactions
-	print("Importing user deposit transactions...")
+	AddEventString("Importing user deposit transactions...", False)
 	ImportUserDepositTransactionsJson()
 		
 def mainLoop():
+	lastMainLoopTime = time.time()
 	lastUnsentCheckTime = time.time()
-	lastSolvencyCheckTime = time.time() + 240.0
-	lastDepositCheckTime = time.time() + 120.0
+	lastSolvencyCheckTime = time.time()
+	lastDepositCheckTime = time.time()
 	
 	global userBalancesCopy
-	userBalancesCopy = userBalances.copy()
-	solvencyThread = threading.Thread(target=checkSolvency)
-	solvencyThread.daemon = True
-	solvencyThread.start()
-	
 	global userDepositAddressesCopy
-	userDepositAddressesCopy = userDepositAddresses.copy()
-	depositsThread = threading.Thread(target=processDeposits)
-	depositsThread.daemon = True
-	depositsThread.start()
+	solvencyThread = 0
+	depositsThread = 0
 
 	while (True):
 		try:
+			#  Update the window handler and check for the ESCAPE key
+			window.update_idletasks()
+			window.update()
+			checkForEscape()
+			
+			#  Run the main loop every 3.0 seconds
+			if (time.time() < lastMainLoopTime): continue
+			lastMainLoopTime = time.time() + 3.0
+				
 			#  Collect all unread mentions and messages
 			gatherUnreads()
 			
@@ -121,8 +174,8 @@ def mainLoop():
 			
 			#  Attempt to re-post comments that failed to post if at least 10 seconds has gone by
 			if (time.time() > lastUnsentCheckTime):
-				lastUnsentCheckTime = time.time() + 10.0
 				processUnsent()
+				lastUnsentCheckTime = time.time() + 10.0
 			
 			#  Check the next 5 messages
 			processMessages()
@@ -131,17 +184,18 @@ def mainLoop():
 			processComments()
 			
 			#  Check for solvency if at least 240 seconds has gone by
-			if (time.time() > lastSolvencyCheckTime):
-				if (not solvencyThread.isAlive()):
+			if ((solvencyThread == 0) or (not solvencyThread.isAlive())):
+				UpdateGUI()
+				if (time.time() > lastSolvencyCheckTime):
 					userBalancesCopy = userBalances.copy()
 					solvencyThread = threading.Thread(target=checkSolvency)
 					solvencyThread.daemon = True
 					solvencyThread.start()
-				lastSolvencyCheckTime = time.time() + 240.0
+					lastSolvencyCheckTime = time.time() + 240.0
 				
 			#  Check for any balance deposits if at least 120 seconds has gone by
 			if (time.time() > lastDepositCheckTime):
-				if (not depositsThread.isAlive()):
+				if ((depositsThread == 0) or (not depositsThread.isAlive())):
 					userDepositAddressesCopy = userDepositAddresses.copy()
 					depositsThread = threading.Thread(target=processDeposits)
 					depositsThread.daemon = True
@@ -149,14 +203,9 @@ def mainLoop():
 				lastDepositCheckTime = time.time() + 120.0
 				
 		except ConnectionError:
-			print("ConnectionError occurred during processing...")
+			AddEventString("ConnectionError occurred during processing...", False)
 		except RequestException:
-			print('RequestException on processing of unreads (likely a timeout / connection error)')
-		
-		#  Sleep for 3 seconds (in 60 increments so we can check for escape key to close program)
-		for x in range(0, 60):
-			checkForEscape()
-			time.sleep(0.05)
+			AddEventString('RequestException on processing of unreads (likely a timeout / connection error)', False)
 			
 def gatherUnreads():
 	#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
@@ -166,7 +215,7 @@ def gatherUnreads():
 	try:
 		for item in allUnread:
 			if (item in markedRead):
-				print("reddit.inbox.unread is returning items after they're marked read... something is wrong")
+				AddEventString("reddit.inbox.unread is returning items after they're marked read... something is wrong")
 				continue
 			try:
 				if isinstance(item, Message):
@@ -174,14 +223,14 @@ def gatherUnreads():
 				elif isinstance(item, Comment):
 					unreadMentions.append(item)
 			except urllib3.exceptions.ReadTimeoutError:
-				print('ReadTimeoutError on processing of unread messages and comments...')
+				AddEventString('ReadTimeoutError on processing of unread messages and comments...')
 			except ssl.SSLError:
-				print('SSL error on processing of unread messages and comments...')
+				AddEventString('SSL error on processing of unread messages and comments...')
 			except Exception as e:
 				print(e)
-				print('Unknown exception on processing of unread messages and comments...')
+				AddEventString('Unknown exception on processing of unread messages and comments...')
 	except RequestException:
-		print('RequestException on processing of unreads (likely a timeout / connection error)')
+		AddEventString('RequestException on processing of unreads (likely a timeout / connection error)', False)
 	
 	for item in unreadMessages: markedRead.append(item)
 	for item in unreadMentions: markedRead.append(item)
@@ -202,7 +251,7 @@ def displayUnreadUnsentCount():
 def checkForEscape():
 	#  If the ESCAPE key is detected within the 3 seconds the bot sleeps per loop, the program exits cleanly
 	if msvcrt.kbhit() and ord(msvcrt.getch()) is 27:
-		print("Detected ESCAPE key press. Closing down the bot...")
+		AddEventString("Detected ESCAPE key press. Closing down the bot...")
 		exit()
 
 def processMessages():
@@ -221,7 +270,7 @@ def processMessages():
 		elif (messageSubject == "BALANCE"):
 			ProcessBalance(messageAuthor)
 		else:
-			print("Removing unknown message: {}".format(message))
+			AddEventString("Removing unknown message: {}".format(message))
 		unreadMessages.remove(message)
 
 def processComments():
@@ -234,7 +283,7 @@ def processComments():
 			if (((botSpecificData.BOT_USERNAME + ' ') in comment.body.lower())):
 				processSingleComment(comment, comment.body.lower())
 		else:
-			print('We received a comment in another subreddit: {}'.format(subName))
+			AddEventString('We received a comment in another subreddit: {}'.format(subName))
 		unreadMentions.remove(comment)
 
 def processSingleComment(comment, commentBody):
@@ -245,7 +294,7 @@ def processSingleComment(comment, commentBody):
 	
 	if (senderName not in userBalances):
 		CommentReply_TipFailure(comment, messageTemplates.TIP_FAILURE_UNREGISTERED_USER, '')
-		print('User {} failed to tip (sender not registered)'.format(senderName))
+		AddEventString('User {} failed to tip (sender not registered)'.format(senderName))
 		return False
 	
 	#  Ensure that either the bot username is the beginning of the comment, or there is a space before it
@@ -263,7 +312,7 @@ def processSingleComment(comment, commentBody):
 			if isRedditorValid(redditor) is False:
 				#  TIP FAILURE: Reddit account could not be found through username specified in comment
 				CommentReply_TipFailure(comment, messageTemplates.USERNAME_IS_REMOVED_OR_BANNED_TEXT, targetName)
-				print('Failed to tip {} (non-existent account)'.format(targetName))
+				AddEventString('Failed to tip {} (non-existent account)'.format(targetName))
 				continue
 			else: #  Redditor is valid
 				#  Ensure that the next string value is a number
@@ -276,24 +325,23 @@ def processSingleComment(comment, commentBody):
 				if amountSatoshi == -1:
 					#  FAILED TIP: Amount not specified correctly in comment
 					CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_SPECIFIED_TEXT, targetName)
-					print('Failed to tip {} (unspecified amount: {})'.format(targetName, amountString))
+					AddEventString('Failed to tip {} (unspecified amount: {})'.format(targetName, amountString))
 					continue
 				else:
 					RegisterUser(senderName, False)
 					if (not isBalanceSufficient(senderName, amountSatoshi)):
 						#  FAILED TIP: Amount not available in user balance
 						CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_AVAILABLE_TEXT, targetName)
-						print('Failed to tip {} (insufficient balance)'.format(targetName))
+						AddEventString('Failed to tip {} (insufficient balance)'.format(targetName))
 						continue
 					else:
 						#  SUCCESSFUL TIP
-						if (senderName is not targetName):
-							processSingleTip(senderName, targetName, amountSatoshi)
-						print('Successful tip: {} -> {} ({})'.format(senderName, targetName, amountString))
+						if (senderName is not targetName): processSingleTip(senderName, targetName, amountSatoshi)
+						AddEventString('Successful tip: {} -> {} ({})'.format(senderName, targetName, amountSatoshi))
 						CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, satoshi_to_currency(amountSatoshi, 'usd'), botSpecificData.BOT_INTRO_LINK)
 						continue
 		else:
-			print("Caught a comment reply with no mention. We should discourage these...")
+			AddEventString("Caught a comment reply with no mention. We should discourage these...")
 			break
 
 def isRedditorValid(redditor):
@@ -334,7 +382,7 @@ def CommentReply_TipFailure(comment, commentTemplate, targetUsername, firstTry=T
 			unsentTipFailures.append(failureComment)
 		return False
 	except:
-		print('Unknown error occurred while commenting on a successful tip...')
+		AddEventString('Unknown error occurred while commenting on a successful tip...')
 		return False
 	
 #  Attempt to comment about the tip success, and save off the comment if we fail to post it
@@ -350,7 +398,7 @@ def CommentReply_TipSuccess(comment, senderUsername, targetUsername, amountSatos
 			unsentTipSuccesses.append(successComment)
 		return False
 	except:
-		print('Unknown error occurred while commenting on a successful tip...')
+		AddEventString('Unknown error occurred while commenting on a successful tip...')
 		return False
 
 #  Attempt to post any comments that failed to post the first time (generally due to reddit API restricting posting too many comments too quickly)
@@ -359,14 +407,14 @@ def processUnsent():
 		failure = unsentTipFailures[0]
 		if (CommentReply_TipFailure(failure[0], failure[1], failure[2], False) is False):
 			break
-		print('Successfully sent a previously blocked comment')
+		AddEventString('Successfully sent a previously blocked comment')
 		unsentTipFailures.remove(failure)
 		
 	while len(unsentTipSuccesses) > 0:
 		success = unsentTipSuccesses[0]
 		if (CommentReply_TipSuccess(success[0], success[1], success[2], success[3], success[4], success[5], False) is False):
 			break
-		print('Successfully sent a previously blocked comment')
+		AddEventString('Successfully sent a previously blocked comment')
 		unsentTipSuccesses.remove(success)
 
 #  Process a sweep deposit, pushing money from a wallet with the given private key to our storage (to avoid the double transaction fee you get when using the normal deposit method)
@@ -375,12 +423,12 @@ def ProcessSweepDeposit(message):
 	userAccount = reddit.redditor(username)
 	RegisterUser(username, False)
 	
-	print('Attempting Sweep Deposit: {}'.format(message.body))
+	AddEventString('Attempting Sweep Deposit: {}'.format(message.body))
 	sweepKey = Key(message.body)
 	sweepBalance = int(sweepKey.get_balance())
 	if (sweepBalance < botSpecificData.MINIMUM_WITHDRAWAL):
 		MINIMUM_DEPOSIT_MBTC = satoshi_to_currency(botSpecificData.MINIMUM_DEPOSIT, 'mbtc')
-		print('Failed to perform sweep deposit for user (balance under minimum deposit)'.format(username))
+		AddEventString('Failed to perform sweep deposit for user [{}] (balance under minimum deposit)'.format(username))
 		userAccount.message('Sweep Deposit failed!', messageTemplates.USER_FAILED_SWEEP_DEPOSIT_UNDER_MINIMUM_MESSAGE_TEXT.format(MINIMUM_DEPOSIT_MBTC))
 		return False
 
@@ -399,7 +447,7 @@ def ProcessSweepDeposit(message):
 	if (storageTX is not ''):
 		addToUserBalance(username, newDepositDelta)
 		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		print('Sweep Deposit successfully sent to storage: {} mBTC'.format(satoshi_to_currency(newDepositDelta, 'mbtc')))
+		AddEventString('Sweep Deposit successfully sent to storage: {} mBTC'.format(satoshi_to_currency(newDepositDelta, 'mbtc')))
 		reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_SWEEP_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
 	else:
 		reddit.redditor(username).message('Your deposit was unuccessful!', messageTemplates.USER_FAILED_SWEEP_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
@@ -425,7 +473,7 @@ def ProcessWithdraw(message, trueWithdrawal):
 	
 	#  Check that the address and amount are formatted correctly
 	if ((GetAddressIsValid(withdrawalAddress) is False) or (amountStringMBTC.replace('.','',1).isdigit() is False)):
-		print('Failed to withdraw \'{}\' to \'{}\''.format(amountStringMBTC, withdrawalAddress))
+		AddEventString('Failed to withdraw \'{}\' to \'{}\''.format(amountStringMBTC, withdrawalAddress))
 		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_MESSAGE_TEXT.format(amountStringMBTC, withdrawalAddress))
 		return False
 		
@@ -433,7 +481,7 @@ def ProcessWithdraw(message, trueWithdrawal):
 	amount = currency_to_satoshi_cached(amountStringMBTC, 'mbtc')
 	amountMBTC = satoshi_to_currency(amount, 'mbtc')
 	if (amount < botSpecificData.MINIMUM_WITHDRAWAL):
-		print('/u/{} failed to withdraw \'{}\' mBTC (below minimum withdrawal value)'.format(username, amountMBTC))
+		AddEventString('/u/{} failed to withdraw \'{}\' mBTC (below minimum withdrawal value)'.format(username, amountMBTC))
 		minimumWithdrawal = currency_to_satoshi_cached(botSpecificData.MINIMUM_WITHDRAWAL, 'mbtc')
 		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, minimumWithdrawal))
 		return False
@@ -441,11 +489,11 @@ def ProcessWithdraw(message, trueWithdrawal):
 	#  Check that the amount requested is in the user balance
 	if (amount > userBalance):
 		balanceMBTC = satoshi_to_currency(userBalance, 'mbtc')
-		print('/u/{} failed to withdraw \'{}\' mBTC (insufficient balance of {})'.format(username, amountMBTC, balanceMBTC))
+		AddEventString('/u/{} failed to withdraw \'{}\' mBTC (insufficient balance of {})'.format(username, amountMBTC, balanceMBTC))
 		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_LOW_BALANCE_MESSAGE_TEXT.format(amountMBTC, balanceMBTC))
 		return False
 	
-	print('Attempting to withdraw {} mBTC from storage. Storage balance: {}'.format(amountMBTC, storageKey.get_balance('mbtc')))
+	AddEventString('Attempting to withdraw {} mBTC from storage. Storage balance: {}'.format(amountMBTC, storageKey.get_balance('mbtc')))
 	
 	#  Attempt to prepare the transaction so we can determine the fee
 	estimatedFee = DetermineFee(storageKey, withdrawalAddress, amount, botSpecificData.WITHDRAWAL_FEE_PER_BYTE)
@@ -453,7 +501,7 @@ def ProcessWithdraw(message, trueWithdrawal):
 	
 	#  If the fee is more than the amount, we can't transfer any bitcoin
 	if (amount <= estimatedFee):
-		print('/u/{} failed to withdraw \'{}\' (fee is greater than amount)'.format(username, amountMBTC))
+		AddEventString('/u/{} failed to withdraw \'{}\' (fee is greater than amount)'.format(username, amountMBTC))
 		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_FEE_TOO_HIGH_MESSAGE_TEXT.format(amount, estimatedFeeMBTC))
 		return False
 		
@@ -463,13 +511,13 @@ def ProcessWithdraw(message, trueWithdrawal):
 		return False
 	
 	#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
-	print('Sending {} satoshis and paying {} satoshis for the fee'.format(amount, estimatedFee))
+	AddEventString('Sending {} satoshis and paying {} satoshis for the fee'.format(amount, estimatedFee))
 	if SendBitcoin(storageKey, withdrawalAddress, amount, estimatedFee, botSpecificData.WITHDRAWAL_FEE_PER_BYTE, "Basic Deposit"):
 		amountMinusFees = amount - estimatedFee
 		amountMinusFeeMBTC = satoshi_to_currency(amountMinusFees, 'mbtc')
 		addToUserBalance(username, amount * -1)
 		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		print('{} withdraw {} mBTC ({} + {} fee)'.format(username, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
+		AddEventString('{} withdraw {} mBTC ({} + {} fee)'.format(username, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
 		reddit.redditor(username).message('Your withdrawal was successful!', messageTemplates.USER_SUCCESS_WITHDRAW_MESSAGE_TEXT.format(amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC, amountMBTC, balanceMBTC, storageTX))
 		
 	return True
@@ -489,15 +537,15 @@ def DetermineFee(senderKey, destinationAddress, amount, satoshisPerByte):
 def SendBitcoin(senderKey, targetAddress, amount, estimatedFee, satoshisPerByte, transactionReason):
 	amountMinusFee = amount - estimatedFee
 	try:
-		print('Sending {} satoshis'.format(amountMinusFee))
+		AddEventString('Sending {} satoshis'.format(amountMinusFee))
 		tx = senderKey.send([(targetAddress, amountMinusFee, 'satoshi')], satoshisPerByte, STORAGE_ADDRESS)
-		print('Transaction successful: {}'.format(tx))
+		AddEventString('Transaction successful: {}'.format(tx))
 		return tx
 	except Exception as ex:
 		amountMBTC = satoshi_to_currency(amount, 'mbtc')
 		estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
 		amountMinusFeeMBTC = satoshi_to_currency(satoshisPerByte, 'mbtc')
-		print('{} transaction of {} mBTC failed ({} + {} fee)'.format(transactionReason, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
+		AddEventString('{} transaction of {} mBTC failed ({} + {} fee)'.format(transactionReason, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
 		print("An exception of type {0} occurred.".format(type(ex).__name__))
 		print(ex.args)
 		return ""
@@ -512,7 +560,7 @@ def ProcessBalance(username):
 	balance = userBalances[username]
 	balanceMBTC = satoshi_to_currency(balance, 'mbtc')
 	reddit.redditor(username).message('Balance Check', messageTemplates.USER_BALANCE_MESSAGE_TEXT.format(balanceMBTC))
-	print('User checked balance: {} [{} mBTC]'.format(username, balanceMBTC))
+	AddEventString('User checked balance: {} [{} mBTC]'.format(username, balanceMBTC))
 		
 def GetAddressIsValid(address):
 	try:
@@ -526,7 +574,7 @@ def GetAddressBalance(address):
 		addressBalance = NetworkAPI.get_balance(address)
 		return addressBalance
 	except ConnectionError:
-		print('Failed to get balance for address: {}'.format(address))
+		AddEventString('Failed to get balance for address: {}'.format(address))
 		return 0.0
 
 #  Check the list of user deposit addresses
@@ -537,27 +585,29 @@ def processDeposits():
 #  Check for solvency (add up tip balances, check against main storage
 def checkSolvency():
 	global userBalancesCopy
+	global allTipBalanceTotal
+	global storageBalance
+	global solvencyDiff
 	global lastSolvencyDiff
-	storageBalance = int(storageKey.get_balance())
-	allTipBalanceTotal = 0
-	for user in userBalancesCopy:
-		allTipBalanceTotal += userBalancesCopy[user]
 	
+	allTipBalanceTotal = 0
+	for user in userBalancesCopy: allTipBalanceTotal += userBalancesCopy[user]
+		
+	storageBalance = int(storageKey.get_balance())
+		
 	solvencyDiff = allTipBalanceTotal - storageBalance
+	
 	if (solvencyDiff != lastSolvencyDiff):
 		lastSolvencyDiff = solvencyDiff
-		print('Solvency report: Tip Balances [{}] - Storage [{}] = {}'.format(allTipBalanceTotal, storageBalance, lastSolvencyDiff))
+		AddEventString('Solvency report: Tip Balances [{}] - Storage [{}] = {}'.format(allTipBalanceTotal, storageBalance, lastSolvencyDiff), False)
 
 #  If the deposit address for the given key has above the minimum balance of bitcoin in it, sweep the balance to storage and update the user's balance
 def processSingleDeposit(username):
 	global userDepositAddressesCopy
 	senderKey = userKeyStructs[username]
 	senderAddress = userDepositAddressesCopy[username]
-	#print('Checking address {}: ('.format(senderAddress), end=''),
 	depositBalance = int(senderKey.get_balance())
-	#print('{} | '.format(depositBalance), end=''),
 	secondaryCheck = int(GetAddressBalance(senderAddress))
-	#print('{})'.format(secondaryCheck))
 	
 	#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
 	if (depositBalance <= botSpecificData.MINIMUM_DEPOSIT):
@@ -565,7 +615,7 @@ def processSingleDeposit(username):
 	
 	#  If the two checks have different values, display an error and return out (this means money is transferring)
 	if (depositBalance != secondaryCheck):
-		print('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck))
+		AddEventString('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck))
 		return False
 	
 	#  Gather a list of unprocessed deposit transactions
@@ -573,7 +623,7 @@ def processSingleDeposit(username):
 	try:
 		depositTransactionList = senderKey.get_transactions()
 		if (depositTransactionList is ""):
-			print("Could not load transaction list")
+			AddEventString("Could not load transaction list")
 			return False
 		
 		for tx in depositTransactionList:
@@ -590,7 +640,7 @@ def processSingleDeposit(username):
 		return False
 	
 	depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
-	print('Deposit detected in {}\'s account: {} mBTC'.format(username, depositBalanceMBTC))
+	AddEventString('Deposit detected in {}\'s account: {} mBTC'.format(username, depositBalanceMBTC))
 	
 	#  Attempt to prepare a transaction so we can determine the fee to take out so the user eats the cost
 	estimatedFee = DetermineFee(senderKey, STORAGE_ADDRESS, depositBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
@@ -603,7 +653,7 @@ def processSingleDeposit(username):
 		newDepositDeltaMBTC = satoshi_to_currency(newDepositDelta, 'mbtc')
 		addToUserBalance(username, newDepositDelta)
 		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		print('Deposit successfully sent to storage: {} mBTC'.format(newDepositDeltaMBTC))
+		AddEventString('Deposit successfully sent to storage: {} mBTC'.format(newDepositDeltaMBTC))
 		reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
 		AddUserDepositTransaction(storageTX, username);
 		
@@ -665,7 +715,7 @@ def RegisterUser(username, isMessage, quickReg=False):
 			reddit.redditor(username).message('Registration', messageTemplates.USER_AUTO_REGISTRATION_MESSAGE_TEXT.format(balanceMBTC, userDepositAddresses[username], userDepositAddresses[username]))
 	
 	if (isMessage):
-		print("Registration message processed: {} {}".format(username, ("(already registered)" if alreadyRegistered else "")))
+		AddEventString("Registration message processed: {} {}".format(username, ("(already registered)" if alreadyRegistered else "")))
 	
 #  Create the basic user, then export all of the data
 def CreateUserData(username):
