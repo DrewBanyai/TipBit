@@ -6,6 +6,9 @@ from bit.exceptions import InsufficientFunds
 from bit.network import get_fee, get_fee_cached
 from bit.network import satoshi_to_currency
 from bit.network import NetworkAPI
+from bit.network.services import BitpayAPI
+from bit.network.services import BlockchainAPI
+from bit.network.services import SmartbitAPI
 
 # BASE IMPORTS
 import pdb
@@ -18,6 +21,7 @@ import msvcrt
 import urllib3
 import ssl
 import threading
+import requests
 from tkinter import *
 
 # PRAW IMPORTS
@@ -29,6 +33,7 @@ from prawcore.exceptions import RequestException
 #  SEPARATED CODE IMPORTS
 import messageTemplates
 import botSpecificData
+import tipbit_utilities
 
 reddit = praw.Reddit(botSpecificData.BOT_USERNAME)
 BOT_MENTION = '/u/{}'.format(botSpecificData.BOT_USERNAME)
@@ -67,9 +72,11 @@ unsentTipFailures = []
 unsentTipSuccesses = []
 unsentCommentCount = 0
 
+pendingDepositList = []
+pendingStorageList = []
+
 allTipBalanceTotal = 0
 storageBalance = 0
-solvencyDiff = 0
 lastSolvencyDiff = 0
 
 #  Tkinter window data
@@ -88,8 +95,13 @@ tipStorageDiffStringVar = StringVar()
 tipBalanceStringVar.set("tip_balance")
 storageBalanceStringVar.set("storage_balance")
 tipStorageDiffStringVar.set("tip_storage_difference")
-eventListbox = Listbox(window, width=800, height=560)
-eventListbox.place(x=0, y=40, anchor='nw')
+eventListbox = Listbox(window)
+eventListbox.place(x=0, y=40, anchor='nw', width=800, height=360)
+eventListboxQueue = []
+depositsListbox = Listbox(window)
+depositsListbox.place(x=5, y=440, anchor='nw', width=390, height=155)
+storageListbox = Listbox(window)
+storageListbox.place(x=405, y=440, anchor='nw', width=390, height=155)
 
 
 def main():
@@ -115,17 +127,46 @@ def SetupGUI():
 	canvas.create_line(0, 40, 800, 40)
 	canvas.create_line(266, 0, 266, 40)
 	canvas.create_line(533, 0, 533, 40)
+	Label(window, text='DEPOSIT TRANSACTIONS', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=200, y=430, anchor='center')
+	Label(window, text='STORAGE TRANSACTIONS', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=600, y=430, anchor='center')
 	
 def UpdateGUI():
 	tipBalanceStringVar.set(allTipBalanceTotal)
 	storageBalanceStringVar.set(storageBalance)
-	tipStorageDiffStringVar.set(solvencyDiff)
+	tipStorageDiffStringVar.set(lastSolvencyDiff)
 	
-def AddEventString(eventString, showInConsole=True):
+	if (len(pendingDepositList) != 0): ApplyPendingDepositsToList()
+	if (len(pendingStorageList) != 0): ApplyPendingStorageToList()
+	
+def ApplyPendingDepositsToList():
+	depositsListbox.delete(0, END)
+	for item in pendingDepositList: depositsListbox.insert(END, item)
+	pendingDepositList.clear()
+	
+def ApplyPendingStorageToList():
+	storageListbox.delete(0, END)
+	for item in pendingStorageList: storageListbox.insert(END, item)
+	pendingStorageList.clear()
+	
+def AddEventString(eventString, showInConsole=True, outsideMainThread=False):
+	if outsideMainThread:
+		eventListboxQueue.append(eventString)
+		return
+		
 	if showInConsole:
 		global eventListbox
 		eventListbox.insert(END, eventString)
 	print(eventString)
+	
+def DoesDepositStringExist(depositString):
+	for i, item in enumerate(depositsListbox.get(0, END)):
+		if (item == depositString): return True
+	return False
+	
+def DoesStorageStringExist(storageString):
+	for i, item in enumerate(storageListbox.get(0, END)):
+		if (item == storageString): return True
+	return False
 	
 def ImportAllUserData():
 	#  Import the list of all user balances
@@ -150,6 +191,9 @@ def mainLoop():
 	lastSolvencyCheckTime = time.time()
 	lastDepositCheckTime = time.time()
 	
+	global storageListbox
+	global depositsListbox
+	
 	global userBalancesCopy
 	global userDepositAddressesCopy
 	solvencyThread = 0
@@ -161,6 +205,10 @@ def mainLoop():
 			window.update_idletasks()
 			window.update()
 			checkForEscape()
+			
+			#  Update the list boxes from the main thread
+			for item in eventListboxQueue: AddEventString(item);
+			eventListboxQueue.clear()
 			
 			#  Run the main loop every 3.0 seconds
 			if (time.time() < lastMainLoopTime): continue
@@ -194,8 +242,9 @@ def mainLoop():
 					lastSolvencyCheckTime = time.time() + 240.0
 				
 			#  Check for any balance deposits if at least 120 seconds has gone by
-			if (time.time() > lastDepositCheckTime):
-				if ((depositsThread == 0) or (not depositsThread.isAlive())):
+			if ((depositsThread == 0) or (not depositsThread.isAlive())):
+				UpdateGUI()
+				if (time.time() > lastDepositCheckTime):
 					userDepositAddressesCopy = userDepositAddresses.copy()
 					depositsThread = threading.Thread(target=processDeposits)
 					depositsThread.daemon = True
@@ -587,79 +636,91 @@ def checkSolvency():
 	global userBalancesCopy
 	global allTipBalanceTotal
 	global storageBalance
-	global solvencyDiff
 	global lastSolvencyDiff
 	
 	allTipBalanceTotal = 0
 	for user in userBalancesCopy: allTipBalanceTotal += userBalancesCopy[user]
-		
-	storageBalance = int(storageKey.get_balance())
-		
-	solvencyDiff = allTipBalanceTotal - storageBalance
 	
-	if (solvencyDiff != lastSolvencyDiff):
-		lastSolvencyDiff = solvencyDiff
-		AddEventString('Solvency report: Tip Balances [{}] - Storage [{}] = {}'.format(allTipBalanceTotal, storageBalance, lastSolvencyDiff), False)
+	storageBalance = tipbit_utilities.get_balance(STORAGE_ADDRESS)
+
+	if ((allTipBalanceTotal - storageBalance) == lastSolvencyDiff): return
+	lastSolvencyDiff = (allTipBalanceTotal - storageBalance)
+	unconfirmedDelta = tipbit_utilities.get_unconfirmed_delta(STORAGE_ADDRESS)
+	
+	solvencyConfirmed = ((lastSolvencyDiff == 0) or (lastSolvencyDiff == unconfirmedDelta))
+	AddEventString('SOLVENCY CONFIRMED' if solvencyConfirmed else 'Solvency report: tb[{}], st[{}], sd[{}], ud[{}]'.format(allTipBalanceTotal, storageBalance, lastSolvencyDiff, unconfirmedDelta), False)
+	
+	if (unconfirmedDelta != 0): pendingStorageList.append('{}'.format(unconfirmedDelta))
 
 #  If the deposit address for the given key has above the minimum balance of bitcoin in it, sweep the balance to storage and update the user's balance
 def processSingleDeposit(username):
-	global userDepositAddressesCopy
-	senderKey = userKeyStructs[username]
-	senderAddress = userDepositAddressesCopy[username]
-	depositBalance = int(senderKey.get_balance())
-	secondaryCheck = int(GetAddressBalance(senderAddress))
-	
-	#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
-	if (depositBalance <= botSpecificData.MINIMUM_DEPOSIT):
-		return False
-	
-	#  If the two checks have different values, display an error and return out (this means money is transferring)
-	if (depositBalance != secondaryCheck):
-		AddEventString('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck))
-		return False
-	
-	#  Gather a list of unprocessed deposit transactions
-	newDepositList = {}
 	try:
-		depositTransactionList = senderKey.get_transactions()
-		if (depositTransactionList is ""):
-			AddEventString("Could not load transaction list")
+		global userDepositAddressesCopy
+		senderKey = userKeyStructs[username]
+		senderAddress = userDepositAddressesCopy[username]
+		depositBalance = int(senderKey.get_balance())
+		secondaryCheck = int(tipbit_utilities.get_balance(senderAddress))
+		
+		#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
+		if (depositBalance <= botSpecificData.MINIMUM_DEPOSIT):
 			return False
 		
-		for tx in depositTransactionList:
-			if (tx in depositTransactionList):
-				break
+		#  If the two checks have different values, display an error and return out (this means money is transferring)
+		if (depositBalance != secondaryCheck):
+			unconfirmedDelta = tipbit_utilities.get_unconfirmed_delta(senderAddress)
+			if (depositBalance != unconfirmedDelta):
+				AddEventString('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck), False, True)
 			else:
-				newDepositList[tx] = depositTransactionList[tx]
-	except json.decoder.JSONDecodeError:
-		print("JSON decoding error when attempting to load transactions for {}".format(username))
-		return False
-	
-	#  If we have no new deposits, we're just detecting already processed deposits and can ignore them
-	if (len(newDepositList) == 0):
-		return False
-	
-	depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
-	AddEventString('Deposit detected in {}\'s account: {} mBTC'.format(username, depositBalanceMBTC))
-	
-	#  Attempt to prepare a transaction so we can determine the fee to take out so the user eats the cost
-	estimatedFee = DetermineFee(senderKey, STORAGE_ADDRESS, depositBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
-	
-	#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
-	storageTX = SendBitcoin(senderKey, STORAGE_ADDRESS, depositBalance, estimatedFee, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE, "Basic Deposit")
-	if (storageTX is not ''):
-		newDepositDelta = depositBalance - estimatedFee
-		estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
-		newDepositDeltaMBTC = satoshi_to_currency(newDepositDelta, 'mbtc')
-		addToUserBalance(username, newDepositDelta)
-		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		AddEventString('Deposit successfully sent to storage: {} mBTC'.format(newDepositDeltaMBTC))
-		reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
-		AddUserDepositTransaction(storageTX, username);
+				pendingDepositList.append("{}: {}".format(username, unconfirmedDelta))
+			return False
 		
-	
-	#  Return True so that we know to remove this deposit from the queue
-	return True
+		#  Gather a list of unprocessed deposit transactions
+		newDepositList = {}
+		try:
+			depositTransactionList = BlockchainAPI.get_transactions(senderKey.address)
+			if (depositTransactionList is ""):
+				AddEventString("Could not load transaction list", True, True)
+				return False
+			
+			for tx in depositTransactionList:
+				if (tx in depositTransactionList):
+					break
+				else:
+					newDepositList[tx] = depositTransactionList[tx]
+		except json.decoder.JSONDecodeError:
+			print("JSON decoding error when attempting to load transactions for {}".format(username))
+			return False
+		except requests.exceptions.ReadTimeout:
+			print("Read timeout error when attempting to load transactions for {}".format(username))
+			return False
+		
+		#  If we have no new deposits, we're just detecting already processed deposits and can ignore them
+		if (len(newDepositList) == 0):
+			return False
+		
+		depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
+		AddEventString('Deposit detected in {}\'s account: {} mBTC'.format(username, depositBalanceMBTC), True, True)
+		
+		#  Attempt to prepare a transaction so we can determine the fee to take out so the user eats the cost
+		estimatedFee = DetermineFee(senderKey, STORAGE_ADDRESS, depositBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
+		
+		#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
+		storageTX = SendBitcoin(senderKey, STORAGE_ADDRESS, depositBalance, estimatedFee, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE, "Basic Deposit")
+		if (storageTX is not ''):
+			newDepositDelta = depositBalance - estimatedFee
+			estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
+			newDepositDeltaMBTC = satoshi_to_currency(newDepositDelta, 'mbtc')
+			addToUserBalance(username, newDepositDelta)
+			balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
+			AddEventString('Deposit successfully sent to storage: {} mBTC'.format(newDepositDeltaMBTC), True, True)
+			reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
+			AddUserDepositTransaction(storageTX, username);
+			
+		#  Return True so that we know to remove this deposit from the queue
+		return True
+
+	except ConnectionError:
+		AddEventString("ConnectionError occurred during deposit processing", False)
 
 def getUserBalance(username):
 	RegisterUser(username, False, True)
