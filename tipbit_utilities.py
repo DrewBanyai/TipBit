@@ -8,6 +8,8 @@ lastConsoleMessageCount = 0
 
 #  Prints to the console, but saves off multiple prints to batch them into one of max size (10) if they are repetitive
 def ConsolePrint(string):
+	global lastConsoleMessage
+
 	if (lastConsoleMessage == string):
 		lastConsoleMessageCount += 1
 		if (lastConsoleMessageCount >= 10):
