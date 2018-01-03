@@ -254,7 +254,7 @@ def mainLoop():
 		except ConnectionError:
 			AddEventString("ConnectionError occurred during processing...", False)
 		except RequestException:
-			AddEventString('RequestException on processing of unreads (likely a timeout / connection error)', False)
+			AddEventString('RequestException on processing unreads (likely a connection error)', False)
 			
 def gatherUnreads():
 	#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
