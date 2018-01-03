@@ -3,6 +3,23 @@ import json
 
 DEFAULT_TIMEOUT = 10
 
+lastConsoleMessage = ''
+lastConsoleMessageCount = 0
+
+#  Prints to the console, but saves off multiple prints to batch them into one of max size (10) if they are repetitive
+def ConsolePrint(string):
+	if (lastConsoleMessage == string):
+		lastConsoleMessageCount += 1
+		if (lastConsoleMessageCount >= 10):
+			print('{} (x {})'.format(string, lastConsoleMessageCount))
+			lastConsoleMessageCount = 0
+	else:
+		if (lastConsoleMessageCount > 0):
+			print('{} (x {})'.format(string, lastConsoleMessageCount))
+		lastConsoleMessageCount = 0
+		lastConsoleMessage = string
+		print(string)
+
 #  Returns the unconfirmed transaction balance delta of the given address
 def get_unconfirmed_delta(address):
 	IGNORED_ERRORS = (ConnectionError, requests.exceptions.ConnectionError, requests.exceptions.Timeout, requests.exceptions.ReadTimeout, json.decoder.JSONDecodeError)
@@ -61,4 +78,4 @@ def get_balance(address):
 		except IGNORED_ERRORS:
 			pass
 
-	raise ConnectionError('All APIs are unreachable.')
+	ConsolePrint("ConnectionError: All APIs are unreachable.")
