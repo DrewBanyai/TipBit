@@ -156,7 +156,7 @@ def AddEventString(eventString, showInConsole=True, outsideMainThread=False):
 	if showInConsole:
 		global eventListbox
 		eventListbox.insert(END, eventString)
-	ConsolePrint(eventString)
+	tipbit_utilities.ConsolePrint(eventString)
 	
 def DoesDepositStringExist(depositString):
 	for i, item in enumerate(depositsListbox.get(0, END)):
@@ -276,7 +276,7 @@ def gatherUnreads():
 			except ssl.SSLError:
 				AddEventString('SSL error on processing of unread messages and comments...')
 			except Exception as e:
-				ConsolePrint(e)
+				tipbit_utilities.ConsolePrint(e)
 				AddEventString('Unknown exception on processing of unread messages and comments...')
 	except RequestException:
 		AddEventString('RequestException on processing of unreads (likely a timeout / connection error)', False)
@@ -292,7 +292,7 @@ def displayUnreadUnsentCount():
 	global unreadMessageCount
 	global unsentCommentCount
 	if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
-		ConsolePrint("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
+		tipbit_utilities.ConsolePrint("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
 	unreadMentionCount = len(unreadMentions)
 	unreadMessageCount = len(unreadMessages)
 	unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
@@ -426,7 +426,7 @@ def CommentReply_TipFailure(comment, commentTemplate, targetUsername, firstTry=T
 		return True
 	except praw.exceptions.APIException as ex:
 		if (firstTry is True): 
-			ConsolePrint('Saving off tip failure comment due to exception: {}'.format(ex.error_type))
+			tipbit_utilities.ConsolePrint('Saving off tip failure comment due to exception: {}'.format(ex.error_type))
 			failureComment = (comment, commentTemplate, targetUsername)
 			unsentTipFailures.append(failureComment)
 		return False
@@ -442,7 +442,7 @@ def CommentReply_TipSuccess(comment, senderUsername, targetUsername, amountSatos
 		return True
 	except praw.exceptions.APIException as ex:
 		if (firstTry is True): 
-			ConsolePrint('Saving off tip success comment due to exception: {}'.format(ex.error_type))
+			tipbit_utilities.ConsolePrint('Saving off tip success comment due to exception: {}'.format(ex.error_type))
 			successComment = (comment, senderUsername, targetUsername, amountSatoshis, amountUSD, botInfoLink)
 			unsentTipSuccesses.append(successComment)
 		return False
@@ -595,8 +595,8 @@ def SendBitcoin(senderKey, targetAddress, amount, estimatedFee, satoshisPerByte,
 		estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
 		amountMinusFeeMBTC = satoshi_to_currency(satoshisPerByte, 'mbtc')
 		AddEventString('{} transaction of {} mBTC failed ({} + {} fee)'.format(transactionReason, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
-		ConsolePrint("An exception of type {0} occurred.".format(type(ex).__name__))
-		ConsolePrint(ex.args)
+		tipbit_utilities.ConsolePrint("An exception of type {0} occurred.".format(type(ex).__name__))
+		tipbit_utilities.ConsolePrint(ex.args)
 		return ""
 
 #  Process a balance request from a user, letting them know their current balance
@@ -688,10 +688,10 @@ def processSingleDeposit(username):
 				else:
 					newDepositList[tx] = depositTransactionList[tx]
 		except json.decoder.JSONDecodeError:
-			ConsolePrint("JSON decoding error when attempting to load transactions for {}".format(username))
+			tipbit_utilities.ConsolePrint("JSON decoding error when attempting to load transactions for {}".format(username))
 			return False
 		except requests.exceptions.ReadTimeout:
-			ConsolePrint("Read timeout error when attempting to load transactions for {}".format(username))
+			tipbit_utilities.ConsolePrint("Read timeout error when attempting to load transactions for {}".format(username))
 			return False
 		
 		#  If we have no new deposits, we're just detecting already processed deposits and can ignore them
