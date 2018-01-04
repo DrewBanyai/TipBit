@@ -643,7 +643,7 @@ def checkSolvency():
 	
 	storageBalance = tipbit_utilities.get_balance(STORAGE_ADDRESS)
 	if storageBalance is None:
-		ConsolePrint('Failed to retrieve storage balance')
+		tipbit_utilities.ConsolePrint('Failed to retrieve storage balance')
 		return
 
 	if ((allTipBalanceTotal - storageBalance) == lastSolvencyDiff): return
