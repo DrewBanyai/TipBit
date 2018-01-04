@@ -641,9 +641,10 @@ def checkSolvency():
 	allTipBalanceTotal = 0
 	for user in userBalancesCopy: allTipBalanceTotal += userBalancesCopy[user]
 	
-	storageBalance = tipbit_utilities.get_balance(STORAGE_ADDRESS)
+	storageBalance = int(tipbit_utilities.get_balance(STORAGE_ADDRESS))
 
-	if ((allTipBalanceTotal - storageBalance) == lastSolvencyDiff): return
+	if ((allTipBalanceTotal - storageBalance) == lastSolvencyDiff): return False
+		
 	lastSolvencyDiff = (allTipBalanceTotal - storageBalance)
 	unconfirmedDelta = tipbit_utilities.get_unconfirmed_delta(STORAGE_ADDRESS)
 	
