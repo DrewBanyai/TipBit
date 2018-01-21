@@ -15,7 +15,6 @@ import pdb
 import re
 import os
 import time
-import pickle
 import json
 import msvcrt
 import urllib3
@@ -58,6 +57,8 @@ userDepositTransactions = {
 
 #  Initialize the Key() array and the empty private key data dictionary
 userKeyStructs = {}
+userKeyStructsCopy = {} # Used for the deposit check thread to avoid race conditions
+
 userPrivateKeys = {
 	# 'exampleUserName' : 'EXAMPLE_PRIVATE_KEY'
 	}
@@ -105,7 +106,11 @@ storageListbox.place(x=405, y=440, anchor='nw', width=390, height=155)
 
 
 def main():
-	AddEventString('Bot ID: {}'.format(reddit.user.me()), False)
+	try:
+		AddEventString('Bot ID: {}'.format(reddit.user.me()), False)
+	except:
+		tipbit_utilities.ConsolePrint("Failed to access PRAW. Shutting down")
+		exit()
 
 	#  Set up the GUI
 	SetupGUI()
@@ -246,6 +251,8 @@ def mainLoop():
 				UpdateGUI()
 				if (time.time() > lastDepositCheckTime):
 					userDepositAddressesCopy = userDepositAddresses.copy()
+					userKeyStructsCopy = userKeyStructs.copy()
+					
 					depositsThread = threading.Thread(target=processDeposits)
 					depositsThread.daemon = True
 					depositsThread.start()
@@ -279,7 +286,7 @@ def gatherUnreads():
 				tipbit_utilities.ConsolePrint(e)
 				AddEventString('Unknown exception on processing of unread messages and comments...')
 	except RequestException:
-		AddEventString('RequestException on processing of unreads (likely a timeout / connection error)', False)
+		AddEventString('RequestException on processing unreads (likely a connection error)', False)
 	
 	for item in unreadMessages: markedRead.append(item)
 	for item in unreadMentions: markedRead.append(item)
@@ -300,7 +307,7 @@ def displayUnreadUnsentCount():
 def checkForEscape():
 	#  If the ESCAPE key is detected within the 3 seconds the bot sleeps per loop, the program exits cleanly
 	if msvcrt.kbhit() and ord(msvcrt.getch()) is 27:
-		AddEventString("Detected ESCAPE key press. Closing down the bot...")
+		tipbit_utilities.ConsolePrint("Detected ESCAPE key press. Closing down the bot...")
 		exit()
 
 def processMessages():
@@ -531,8 +538,7 @@ def ProcessWithdraw(message, trueWithdrawal):
 	amountMBTC = satoshi_to_currency(amount, 'mbtc')
 	if (amount < botSpecificData.MINIMUM_WITHDRAWAL):
 		AddEventString('/u/{} failed to withdraw \'{}\' mBTC (below minimum withdrawal value)'.format(username, amountMBTC))
-		minimumWithdrawal = currency_to_satoshi_cached(botSpecificData.MINIMUM_WITHDRAWAL, 'mbtc')
-		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, minimumWithdrawal))
+		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, botSpecificData.MINIMUM_WITHDRAWAL))
 		return False
 		
 	#  Check that the amount requested is in the user balance
@@ -628,7 +634,7 @@ def GetAddressBalance(address):
 
 #  Check the list of user deposit addresses
 def processDeposits():
-	for key in userKeyStructs:
+	for key in userKeyStructsCopy:
 		processSingleDeposit(key)
 		
 #  Check for solvency (add up tip balances, check against main storage
@@ -660,10 +666,14 @@ def checkSolvency():
 def processSingleDeposit(username):
 	try:
 		global userDepositAddressesCopy
-		senderKey = userKeyStructs[username]
+		senderKey = userKeyStructsCopy[username]
 		senderAddress = userDepositAddressesCopy[username]
 		depositBalance = int(senderKey.get_balance())
-		secondaryCheck = int(tipbit_utilities.get_balance(senderAddress))
+		secondaryCheck = tipbit_utilities.get_balance(senderAddress)
+		
+		if secondaryCheck is None:
+			tipbit_utilities.ConsolePrint('Failed to retrieve deposit balance for user')
+			return False
 		
 		#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
 		if (depositBalance <= botSpecificData.MINIMUM_DEPOSIT):
