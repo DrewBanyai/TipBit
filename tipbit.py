@@ -669,7 +669,7 @@ def processSingleDeposit(username):
 		senderKey = userKeyStructsCopy[username]
 		senderAddress = userDepositAddressesCopy[username]
 		depositBalance = int(senderKey.get_balance())
-		secondaryCheck = tipbit_utilities.get_balance(senderAddress)
+		secondaryCheck = int(tipbit_utilities.get_balance(senderAddress))
 		
 		if secondaryCheck is None:
 			tipbit_utilities.ConsolePrint('Failed to retrieve deposit balance for user')
