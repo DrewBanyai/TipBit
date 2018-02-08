@@ -1,0 +1,18 @@
+The following tests should be done for every version change. These tests can be run on TestNet through tip_bit_test before the code gets moved over to tip_bit.
+
+Primary Testing: Main Features
+1) Register an account through the normal method of sending a message with the subject line "Register" (case-insensitive).
+2) Deposit bitcoin into the given legacy address. Deposit bitcoin into the given segwit address. Ensure both deposits correctly get credited to account and the messages sent out are correct.
+3) Tip Testing: Tip two users in the same message. Tip using the normal mBTC method. Tip using an Amount Moniker. Tip using a $ delimiter.
+4) Complete a balance check through the normal method of sending a message with the subject line "Balance" (case-insensitive).
+5) Complete a withdrawal test through the normal method of sending a message with the subject line "Withdraw Test" (case-insensitive) and the body having an address and amount in mBTC.
+6) Complete a real withdrawal through the normal method of sending a message with the subject line "Withdraw" (case-insensitive) and the body having an address and amount in mBTC.
+7) Add the bot as an approved user so it gets a message with no author.
+
+Secondary Testing: Incorrect Usage
+1) Attempt to register with an already-registered account.
+2) Attempt to deposit too low of an amount to both deposit addresses.
+3) Tip Testing: Tip without an amount. Tip with an invalid amount (letters in the number?). Tip more than you have in your account. Tip yourself. Tip a non-existent reddit account. Tip from an unregistered account.
+4) Attempt a withdrawal test without an address. Attempt a withdrawal test without an amount. Attempt a withdrawal test with an invalid amount. Attempt a withdrawal test with an invalid address. Attempt a withdrawal test and ask for more than your account has.
+5) Attempt a real withdrawal without an address. Attempt a real withdrawal without an amount. Attempt a real withdrawal with an invalid amount. Attempt a real withdrawal with an invalid address. Attempt a real withdrawal and ask for more than your account has.
+6) Mention the bot without any tip information.

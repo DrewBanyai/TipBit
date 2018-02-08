@@ -287,6 +287,8 @@ def gatherUnreads():
 				AddEventString('Unknown exception on processing of unread messages and comments...')
 	except RequestException:
 		AddEventString('RequestException on processing unreads (likely a connection error)', False)
+	except ServerError:
+		AddEventString('ServerError on processing unreads (likely a connection error)', False)
 	
 	for item in unreadMessages: markedRead.append(item)
 	for item in unreadMentions: markedRead.append(item)
@@ -314,7 +316,8 @@ def processMessages():
 	#  Hunt through the different subject lines we respond to. If it is anything else, toss it and mention it in console
 	for message in unreadMessages:
 		messageSubject = message.subject.upper()
-		messageAuthor = message.author.name.lower()
+		messageAuthor = message.author
+		messageAuthor = ('Name Unknown!' if messageAuthor is None else message.author.name.lower())
 		if (messageSubject == "REGISTER"):
 			RegisterUser(messageAuthor, True)
 		elif (messageSubject == "SWEEP DEPOSIT"):
