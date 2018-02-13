@@ -1,27 +1,19 @@
-# BIT IMPORTS
-from bit import Key
-from bit import wif_to_key
-from bit.network.rates import currency_to_satoshi_cached
-from bit.exceptions import InsufficientFunds
-from bit.network import get_fee, get_fee_cached
-from bit.network import satoshi_to_currency
-from bit.network import NetworkAPI
-from bit.network.services import BitpayAPI
-from bit.network.services import BlockchainAPI
-from bit.network.services import SmartbitAPI
-
-# BASE IMPORTS
-import pdb
-import re
+import pycurl
+try:
+    from StringIO import StringIO
+except ImportError:
+    from io import StringIO
+	
+import sys
 import os
 import time
 import json
-import msvcrt
-import urllib3
-import ssl
-import threading
-import requests
-from tkinter import *
+import botSpecificData
+import string
+from decimal import Decimal
+
+#  BIT IMPORTS
+from bit import Key, PrivateKey, PrivateKeyTestnet
 
 # PRAW IMPORTS
 import praw
@@ -32,36 +24,25 @@ from prawcore.exceptions import RequestException
 #  SEPARATED CODE IMPORTS
 import messageTemplates
 import botSpecificData
-import tipbit_utilities
+import tipbitUtilities
+import tipbitWindow
+
+#  Determine if this is the testnet or mainnet bot, then connect to the node via RPC
+botSpecificData.DetermineDataBasedOnNetwork('testnet' in sys.argv)
+tipbitUtilities.ConnectViaRPC()
 
 reddit = praw.Reddit(botSpecificData.BOT_USERNAME)
 BOT_MENTION = '/u/{}'.format(botSpecificData.BOT_USERNAME)
-storageKey = Key(botSpecificData.STORAGE_PRIVATE_KEY)
-STORAGE_ADDRESS = storageKey.address
-	
-#  Initialize the empty user balances dictionary
-userBalances = {
-	# 'exampleUserName' : 100000000,
-	}
-userBalancesCopy = {} # Used for the solvency check thread to avoid race conditions
 
-#  Initialize the empty user deposit addresses dictionary
-userDepositAddresses = {
-	# 'exampleUserName' : 'EXAMPLE_ADDRESS'
-	}
-userDepositAddressesCopy = {} # Used for the deposit check thread to avoid race conditions
+#  Initialize the existing user data dictionaries
+userPrivateKeys = {}
+userBalances = {}
+userDepositAddressesLegacy = {}
+userDepositAddressesSegwit = {}
 
-userDepositTransactions = {
-	# 'exampleTX' : "username"
-	}
-
-#  Initialize the Key() array and the empty private key data dictionary
-userKeyStructs = {}
-userKeyStructsCopy = {} # Used for the deposit check thread to avoid race conditions
-
-userPrivateKeys = {
-	# 'exampleUserName' : 'EXAMPLE_PRIVATE_KEY'
-	}
+primaryStorageBalance = 0
+primaryTipBalance = 0
+primarySolvencyDiff = 0
 	
 unreadMessages = []
 unreadMessageCount = 0
@@ -73,263 +54,76 @@ unsentTipFailures = []
 unsentTipSuccesses = []
 unsentCommentCount = 0
 
-pendingDepositList = []
-pendingStorageList = []
+UnusedAddressesLegacy = []
+UnusedAddressesSegwit = []
+UsedAddressesLegacy = {}
+UsedAddressesSegwit = {}
 
-allTipBalanceTotal = 0
-storageBalance = 0
-lastSolvencyDiff = 0
-
-#  Tkinter window data
-window = Tk()
-window.geometry('800x600')
-window.resizable(width=False, height=False)
-window.iconbitmap('TipBitIcon.ico')
-window.title("TipBit - The Reddit Bitcoin Tip Bot")
-canvas = Canvas(window, width=800, height=600)
-canvas.pack()
-
-#   GUI Editable Objects
-tipBalanceStringVar = StringVar()
-storageBalanceStringVar = StringVar()
-tipStorageDiffStringVar = StringVar()
-tipBalanceStringVar.set("tip_balance")
-storageBalanceStringVar.set("storage_balance")
-tipStorageDiffStringVar.set("tip_storage_difference")
-eventListbox = Listbox(window)
-eventListbox.place(x=0, y=40, anchor='nw', width=800, height=360)
-eventListboxQueue = []
-depositsListbox = Listbox(window)
-depositsListbox.place(x=5, y=440, anchor='nw', width=390, height=155)
-storageListbox = Listbox(window)
-storageListbox.place(x=405, y=440, anchor='nw', width=390, height=155)
-
+def ClaimPrimaryStorageAddresses():
+	print('Claiming Primary Storage Addresses')
+	tipbitUtilities.ImportPrivateKey(botSpecificData.PRIMARY_STORAGE_PRIVATE_KEY, 'PRIMARY STORAGE LEGACY' if botSpecificData.PRIMARY_STORAGE_SEGWIT else 'PRIMARY STORAGE', False)
+	tipbitUtilities.GetNewSegwitAddress('PRIMARY STORAGE' if botSpecificData.PRIMARY_STORAGE_SEGWIT else 'PRIMARY STORAGE SEGWIT', botSpecificData.PRIMARY_STORAGE_ADDRESS_LEGACY, False)
 
 def main():
 	try:
-		AddEventString('Bot ID: {}'.format(reddit.user.me()), False)
+		tipbitUtilities.ConsolePrint('- Bot ID: {}'.format(reddit.user.me()))
 	except:
-		tipbit_utilities.ConsolePrint("Failed to access PRAW. Shutting down")
+		tipbitUtilities.ConsolePrint("Failed to access PRAW. Shutting down")
 		exit()
+		
+	#  Claim the primary storage address
+	ClaimPrimaryStorageAddresses()
 
 	#  Set up the GUI
-	SetupGUI()
+	print('- Setting up GUI...')
+	tipbitWindow.SetupGUI()
 	
-	#  Import all user data
-	ImportAllUserData()
+	#  Import user data and print the balances
+	print('- Importing User Data...')
+	ImportUserData()
+	
+	#  Gather a list of unused legacy and segwit addresses attached to this bitcoin wallet
+	print('- Parsing existing addresses...')
+	ParseExistingAddresses()
+	
+	#  Determine whether the connected node has the Primary Storage address controlled. If not, exit out
+	if (CheckForPrimaryStorage() == False):
+		print('Connected node does not have control over the Primary Storage address! Shutting down...')
+		exit()
+	
+	#  Print out info about current balances
+	print('')
+	tipbitUtilities.PrintWalletBalancesList()
+	print('')
+	tipbitUtilities.PrintAccountBalancesList()
+	print('')
 	
 	#  Initiate the main loop function
-	AddEventString("Initiating main loop", False)
+	print("- Initiating main loop")
 	mainLoop()
 	
-def SetupGUI():
-	Label(window, text='TIP BALANCE', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=133, y=10, anchor='center')
-	Label(window, textvariable=tipBalanceStringVar, anchor='center', justify=CENTER).place(x=133, y=28, anchor='center')
-	Label(window, text='STORAGE BALANCE', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=400, y=10, anchor='center')
-	Label(window, textvariable=storageBalanceStringVar, anchor='center', justify=CENTER).place(x=400, y=28, anchor='center')
-	Label(window, text='DIFFERENCE', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=666, y=10, anchor='center')
-	Label(window, textvariable=tipStorageDiffStringVar, anchor='center', justify=CENTER).place(x=666, y=28, anchor='center')
-	canvas.create_line(0, 40, 800, 40)
-	canvas.create_line(266, 0, 266, 40)
-	canvas.create_line(533, 0, 533, 40)
-	Label(window, text='DEPOSIT TRANSACTIONS', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=200, y=430, anchor='center')
-	Label(window, text='STORAGE TRANSACTIONS', anchor='center', justify=CENTER, font='Arial 9 bold').place(x=600, y=430, anchor='center')
-	
-def UpdateGUI():
-	tipBalanceStringVar.set(allTipBalanceTotal)
-	storageBalanceStringVar.set(storageBalance)
-	tipStorageDiffStringVar.set(lastSolvencyDiff)
-	
-	if (len(pendingDepositList) != 0): ApplyPendingDepositsToList()
-	if (len(pendingStorageList) != 0): ApplyPendingStorageToList()
-	
-def ApplyPendingDepositsToList():
-	depositsListbox.delete(0, END)
-	for item in pendingDepositList: depositsListbox.insert(END, item)
-	pendingDepositList.clear()
-	
-def ApplyPendingStorageToList():
-	storageListbox.delete(0, END)
-	for item in pendingStorageList: storageListbox.insert(END, item)
-	pendingStorageList.clear()
-	
-def AddEventString(eventString, showInConsole=True, outsideMainThread=False):
-	if outsideMainThread:
-		eventListboxQueue.append(eventString)
-		return
+def CheckForPrimaryStorage():
+	accountsList = tipbitUtilities.GetAccountsList()
+	for account in accountsList:
+		addressList = tipbitUtilities.GetAddressListForAccount(account)
+		for address in addressList:
+			if (address == botSpecificData.PRIMARY_STORAGE_ADDRESS): return True
 		
-	if showInConsole:
-		global eventListbox
-		eventListbox.insert(END, eventString)
-	tipbit_utilities.ConsolePrint(eventString)
-	
-def DoesDepositStringExist(depositString):
-	for i, item in enumerate(depositsListbox.get(0, END)):
-		if (item == depositString): return True
 	return False
-	
-def DoesStorageStringExist(storageString):
-	for i, item in enumerate(storageListbox.get(0, END)):
-		if (item == storageString): return True
-	return False
-	
-def ImportAllUserData():
-	#  Import the list of all user balances
-	AddEventString("Importing user balances...", False)
-	ImportUserBalancesJson()
-	
-	#  Import the list of all user deposit addresses
-	AddEventString("Importing user deposit addresses...", False)
-	ImportUserDepositAddressesJson()
-	
-	#  Import the list of all user private keys
-	AddEventString("Importing user private keys...", False)
-	ImportUserPrivateKeysJson()
-	
-	#  Import the list of all user deposit transactions
-	AddEventString("Importing user deposit transactions...", False)
-	ImportUserDepositTransactionsJson()
-		
-def mainLoop():
-	lastMainLoopTime = time.time()
-	lastUnsentCheckTime = time.time()
-	lastSolvencyCheckTime = time.time()
-	lastDepositCheckTime = time.time()
-	
-	global storageListbox
-	global depositsListbox
-	
-	global userBalancesCopy
-	global userDepositAddressesCopy
-	solvencyThread = 0
-	depositsThread = 0
-
-	while (True):
-		try:
-			#  Update the window handler and check for the ESCAPE key
-			window.update_idletasks()
-			window.update()
-			checkForEscape()
-			
-			#  Update the list boxes from the main thread
-			for item in eventListboxQueue: AddEventString(item);
-			eventListboxQueue.clear()
-			
-			#  Run the main loop every 3.0 seconds
-			if (time.time() < lastMainLoopTime): continue
-			lastMainLoopTime = time.time() + 3.0
-				
-			#  Collect all unread mentions and messages
-			gatherUnreads()
-			
-			#  Display any change in the current unread or unsent count
-			displayUnreadUnsentCount()
-			
-			#  Attempt to re-post comments that failed to post if at least 10 seconds has gone by
-			if (time.time() > lastUnsentCheckTime):
-				processUnsent()
-				lastUnsentCheckTime = time.time() + 10.0
-			
-			#  Check the next 5 messages
-			processMessages()
-			
-			#  Check the next 5 comments
-			processComments()
-			
-			#  Check for solvency if at least 240 seconds has gone by
-			if ((solvencyThread == 0) or (not solvencyThread.isAlive())):
-				UpdateGUI()
-				if (time.time() > lastSolvencyCheckTime):
-					userBalancesCopy = userBalances.copy()
-					solvencyThread = threading.Thread(target=checkSolvency)
-					solvencyThread.daemon = True
-					solvencyThread.start()
-					lastSolvencyCheckTime = time.time() + 240.0
-				
-			#  Check for any balance deposits if at least 120 seconds has gone by
-			if ((depositsThread == 0) or (not depositsThread.isAlive())):
-				UpdateGUI()
-				if (time.time() > lastDepositCheckTime):
-					userDepositAddressesCopy = userDepositAddresses.copy()
-					userKeyStructsCopy = userKeyStructs.copy()
-					
-					depositsThread = threading.Thread(target=processDeposits)
-					depositsThread.daemon = True
-					depositsThread.start()
-				lastDepositCheckTime = time.time() + 120.0
-				
-		except ConnectionError:
-			AddEventString("ConnectionError occurred during processing...", False)
-		except RequestException:
-			AddEventString('RequestException on processing unreads (likely a connection error)', False)
-			
-def gatherUnreads():
-	#  Process all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
-	global allUnread
-	global markedRead
-	allUnread = reddit.inbox.unread(limit=1)
-	try:
-		for item in allUnread:
-			if (item in markedRead):
-				AddEventString("reddit.inbox.unread is returning items after they're marked read... something is wrong")
-				continue
-			try:
-				if isinstance(item, Message):
-					unreadMessages.append(item)
-				elif isinstance(item, Comment):
-					unreadMentions.append(item)
-			except urllib3.exceptions.ReadTimeoutError:
-				AddEventString('ReadTimeoutError on processing of unread messages and comments...')
-			except ssl.SSLError:
-				AddEventString('SSL error on processing of unread messages and comments...')
-			except Exception as e:
-				tipbit_utilities.ConsolePrint(e)
-				AddEventString('Unknown exception on processing of unread messages and comments...')
-	except RequestException:
-		AddEventString('RequestException on processing unreads (likely a connection error)', False)
-	except ServerError:
-		AddEventString('ServerError on processing unreads (likely a connection error)', False)
-	
-	for item in unreadMessages: markedRead.append(item)
-	for item in unreadMentions: markedRead.append(item)
-	reddit.inbox.mark_read(unreadMessages)
-	reddit.inbox.mark_read(unreadMentions)
-		
-def displayUnreadUnsentCount():
-	#  If the unread mention count has changed, print a message
-	global unreadMentionCount
-	global unreadMessageCount
-	global unsentCommentCount
-	if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
-		tipbit_utilities.ConsolePrint("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
-	unreadMentionCount = len(unreadMentions)
-	unreadMessageCount = len(unreadMessages)
-	unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
-
-def checkForEscape():
-	#  If the ESCAPE key is detected within the 3 seconds the bot sleeps per loop, the program exits cleanly
-	if msvcrt.kbhit() and ord(msvcrt.getch()) is 27:
-		tipbit_utilities.ConsolePrint("Detected ESCAPE key press. Closing down the bot...")
-		exit()
 
 def processMessages():
 	#  Hunt through the different subject lines we respond to. If it is anything else, toss it and mention it in console
 	for message in unreadMessages:
 		messageSubject = message.subject.upper()
-		messageAuthor = message.author
-		messageAuthor = ('Name Unknown!' if messageAuthor is None else message.author.name.lower())
-		if (messageSubject == "REGISTER"):
-			RegisterUser(messageAuthor, True)
-		elif (messageSubject == "SWEEP DEPOSIT"):
-			ProcessSweepDeposit(message)
-		elif (messageSubject == "WITHDRAW"):
-			ProcessWithdraw(message, True)
-		elif (messageSubject == "WITHDRAW TEST"):
-			ProcessWithdraw(message, False)
-		elif (messageSubject == "BALANCE"):
-			ProcessBalance(messageAuthor)
-		else:
-			AddEventString("Removing unknown message: {}".format(message))
+		messageAuthor = message.author;
+		messageAuthor = ('Name Unknown!' if (messageAuthor is None) else message.author.name.lower())
+		
+		if   (messageSubject == 'REGISTER'):			RegisterNewUser(messageAuthor, True)
+		elif (messageSubject == 'SWEEP DEPOSIT'):		ProcessSweepDeposit(message)
+		elif (messageSubject == 'WITHDRAW'):			ProcessWithdraw(message, True)
+		elif (messageSubject == 'WITHDRAW TEST'):		ProcessWithdraw(message, False)
+		elif (messageSubject == 'BALANCE'):				ProcessBalance(messageAuthor)
+		else:											tipbitWindow.AddEventString("Removing unknown message: {}".format(message))
 		unreadMessages.remove(message)
 
 def processComments():
@@ -342,93 +136,93 @@ def processComments():
 			if (((botSpecificData.BOT_USERNAME + ' ') in comment.body.lower())):
 				processSingleComment(comment, comment.body.lower())
 		else:
-			AddEventString('We received a comment in another subreddit: {}'.format(subName))
+			tipbitWindow.AddEventString('We received a comment in another subreddit: {}'.format(subName))
 		unreadMentions.remove(comment)
 
 def processSingleComment(comment, commentBody):
+	commentBody = commentBody.lower()
+	if (commentBody == ''): return
 	#  Note: This function allows you to pass in an altered comment body, which will then get processed. The comment reference is only used to reply onto
 	
-	#  Grab the author's name to use for tipping and registration purposes
+	#  Grab the author's name and post OP's name to use for tipping and registration purposes
 	senderName = comment.author.name.lower()
+	PostOPName = comment.submission.author.name.lower()
 	
-	if (senderName not in userBalances):
-		CommentReply_TipFailure(comment, messageTemplates.TIP_FAILURE_UNREGISTERED_USER, '')
-		AddEventString('User {} failed to tip (sender not registered)'.format(senderName))
+	#  If someone is trying to tip without being registered, comment on the failure and log the event
+	if (isUserRegistered(senderName) is False):
+		CommentReply_TipFailure(comment, messageTemplates.TIP_FAILURE_UNREGISTERED_USER.format(botSpecificData.BOT_REGISTER_PM_LINK), '')
+		tipbitWindow.AddEventString('User {} failed to tip (sender not registered)'.format(senderName))
 		return False
 	
 	#  Ensure that either the bot username is the beginning of the comment, or there is a space before it
 	separate_around_bot = commentBody.partition(botSpecificData.BOT_USERNAME + ' ')
-	while (separate_around_bot[1] != ""):
-		if ((separate_around_bot[1] == (botSpecificData.BOT_USERNAME + ' '))):
-			#  Check if the next word is a username and if that user exists. If not, comment back as such
-			separate_around_target = separate_around_bot[2].partition(" ")
-			separate_around_bot = separate_around_target[2].partition(botSpecificData.BOT_USERNAME + ' ')
+	if (separate_around_bot[1] != (botSpecificData.BOT_USERNAME + ' ')):
+		tipbitWindow.AddEventString("Caught a comment reply with no mention. This shouldn't happen...")
+		return
+		
+	#  Grab the different parts of the comment for later use
+	separate_around_target = separate_around_bot[2].partition(" ")
+	next_tip = separate_around_target[2].partition(botSpecificData.BOT_USERNAME + ' ')
+	next_tip = (next_tip[1] + next_tip[2]) if (next_tip[1] == botSpecificData.BOT_USERNAME + ' ') else ''
 			
-			targetName = separate_around_target[0].lower()
-			if ('/u/' in targetName):
-				targetName = targetName.partition('/u/')[2]
-			redditor = reddit.redditor(targetName)
-			if isRedditorValid(redditor) is False:
-				#  TIP FAILURE: Reddit account could not be found through username specified in comment
-				CommentReply_TipFailure(comment, messageTemplates.USERNAME_IS_REMOVED_OR_BANNED_TEXT, targetName)
-				AddEventString('Failed to tip {} (non-existent account)'.format(targetName))
-				continue
-			else: #  Redditor is valid
-				#  Ensure that the next string value is a number
-				separate_around_amount = separate_around_target[2].partition(' ')
-				if ('\n' in separate_around_amount[0]):
-					separate_around_amount = separate_around_amount[0].partition('\n')
-					
-				amountString = separate_around_amount[0]
-				amountSatoshi = getSatoshiFromAmountString(amountString)
-				if amountSatoshi == -1:
-					#  FAILED TIP: Amount not specified correctly in comment
-					CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_SPECIFIED_TEXT, targetName)
-					AddEventString('Failed to tip {} (unspecified amount: {})'.format(targetName, amountString))
-					continue
-				else:
-					RegisterUser(senderName, False)
-					if (not isBalanceSufficient(senderName, amountSatoshi)):
-						#  FAILED TIP: Amount not available in user balance
-						CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_AVAILABLE_TEXT, targetName)
-						AddEventString('Failed to tip {} (insufficient balance)'.format(targetName))
-						continue
-					else:
-						#  SUCCESSFUL TIP
-						if (senderName is not targetName): processSingleTip(senderName, targetName, amountSatoshi)
-						AddEventString('Successful tip: {} -> {} ({})'.format(senderName, targetName, amountSatoshi))
-						CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, satoshi_to_currency(amountSatoshi, 'usd'), botSpecificData.BOT_INTRO_LINK)
-						continue
-		else:
-			AddEventString("Caught a comment reply with no mention. We should discourage these...")
-			break
+	#  Figure out the target of this tip
+	targetName = separate_around_target[0].lower()
+	if ('/u/' in targetName):	targetName = targetName.partition('/u/')[2]
+	if (targetName == 'op'): 	targetName = PostOPName
+	print('processSingleComment() target: {}'.format(targetName))
+	redditor = reddit.redditor(targetName)
+	
+	#  If this redditor isn't valid, comment on the failure and log the event
+	if tipbitUtilities.isRedditorValid(redditor) is False:
+		CommentReply_TipFailure(comment, messageTemplates.USERNAME_IS_REMOVED_OR_BANNED_TEXT.format(botSpecificData.BOT_USERNAME), targetName)
+		tipbitWindow.AddEventString('Failed to tip {} (non-existent account)'.format(targetName))
+		processSingleComment(comment, next_tip)
+		return
+		
+	#  Grab the amount value string
+	separate_around_amount = separate_around_target[2].partition(' ')
+	if ('\n' in separate_around_amount[0]): separate_around_amount = separate_around_amount[0].partition('\n')
+	amountString = separate_around_amount[0]
+	
+	#  Determine the amount in Satoshis. If the amount is invalid, comment on the failure and log the event
+	amountSatoshi = getSatoshiFromAmountString(amountString)
+	if amountSatoshi == -1:
+		CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_SPECIFIED_TEXT, targetName)
+		tipbitWindow.AddEventString('Failed to tip {} (unspecified amount: {})'.format(targetName, amountString))
+		processSingleComment(comment, next_tip)
+		return
+		
+	#  If the user does not have a sufficient balance to complete the tip, comment on the failure and log the event
+	if (isBalanceSufficient(senderName, amountSatoshi) is False):
+		CommentReply_TipFailure(comment, messageTemplates.AMOUNT_NOT_AVAILABLE_TEXT, targetName)
+		tipbitWindow.AddEventString('Failed to tip {} (insufficient balance)'.format(targetName))
+		processSingleComment(comment, next_tip)
+		return
 
-def isRedditorValid(redditor):
-	try:
-		redditor.id
-		return True
-	except:
-		return False
-			
-def isStringFloat(amountString):
-	try:
-		return (amountString.replace('.','',1).isdigit() is True)
-	except ValueError:
-		return False
+	#  If we get this far, the tip should be successful. Comment on the success, log it out, and complete the tip
+	tipSuccess = True if (senderName is targetName) else processSingleTip(senderName, targetName, amountSatoshi)
+	if (tipSuccess is True):
+		tipbitWindow.AddEventString('Successful tip: {} -> {} ({})'.format(senderName, targetName, amountSatoshi))
+		CommentReply_TipSuccess(comment, senderName, targetName, amountSatoshi, tipbitUtilities.SatoshisToUSD(amountSatoshi), botSpecificData.BOT_INTRO_LINK)
+	else:
+		tipbitWindow.AddEventString('Failed to tip: {} -> {} ({})'.format(senderName, targetName, amountSatoshi))
+		CommentReply_TipFailure(comment, 'Unknown failure while tipping {}', targetName)
+	
+	#  Attempt to pass another tip from the same comment into this function to be processed
+	processSingleComment(comment, next_tip)
 		
 def getSatoshiFromAmountString(amountString):
-	if (isStringFloat(amountString)):
-		return int(currency_to_satoshi_cached(amountString, 'mbtc'))
+	if (tipbitUtilities.isStringFloat(amountString)):
+		return int(tipbitUtilities.MBTCToSatoshis(Decimal(amountString)))
 	if (amountString in botSpecificData.AMOUNT_DICTIONARY):
 		return getSatoshiFromAmountString(botSpecificData.AMOUNT_DICTIONARY[amountString])
 	if (amountString[0] == '$'):
 		amountString = amountString[1:]
-		if (isStringFloat(amountString)):
-			return int(currency_to_satoshi_cached(amountString, 'usd'))
+		if (tipbitUtilities.isStringFloat(amountString)):
+			return int(tipbitUtilities.USDToSatoshis(amountString))
 		
 	return -1
 		
-
 #  Attempt to comment about the tip failure, and save off the comment if we fail to post it
 def CommentReply_TipFailure(comment, commentTemplate, targetUsername, firstTry=True):
 	try:
@@ -436,88 +230,112 @@ def CommentReply_TipFailure(comment, commentTemplate, targetUsername, firstTry=T
 		return True
 	except praw.exceptions.APIException as ex:
 		if (firstTry is True): 
-			tipbit_utilities.ConsolePrint('Saving off tip failure comment due to exception: {}'.format(ex.error_type))
+			tipbitUtilities.ConsolePrint('Saving off tip failure comment due to exception: {}'.format(ex.error_type))
 			failureComment = (comment, commentTemplate, targetUsername)
 			unsentTipFailures.append(failureComment)
 		return False
 	except:
-		AddEventString('Unknown error occurred while commenting on a successful tip...')
+		tipbitWindow.AddEventString('Unknown error occurred while commenting on a successful tip...')
 		return False
 	
 #  Attempt to comment about the tip success, and save off the comment if we fail to post it
 def CommentReply_TipSuccess(comment, senderUsername, targetUsername, amountSatoshis, amountUSD, botInfoLink, firstTry=True):
-	amountMBTC = satoshi_to_currency(amountSatoshis, 'mbtc')
+	amountMBTC = tipbitUtilities.SatoshisToMBTC(amountSatoshis)
 	try:
-		comment.reply(messageTemplates.SUCCESSFUL_TIP_TEXT.format(senderUsername, targetUsername, amountMBTC, amountUSD, botInfoLink))
+		comment.reply(messageTemplates.SUCCESSFUL_TIP_TEXT.format(senderUsername, targetUsername, amountMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), "%.2f" % amountUSD, botInfoLink))
 		return True
 	except praw.exceptions.APIException as ex:
 		if (firstTry is True): 
-			tipbit_utilities.ConsolePrint('Saving off tip success comment due to exception: {}'.format(ex.error_type))
+			tipbitUtilities.ConsolePrint('Saving off tip success comment due to exception: {}'.format(ex.error_type))
 			successComment = (comment, senderUsername, targetUsername, amountSatoshis, amountUSD, botInfoLink)
 			unsentTipSuccesses.append(successComment)
 		return False
 	except:
-		AddEventString('Unknown error occurred while commenting on a successful tip...')
+		tipbitWindow.AddEventString('Unknown error occurred while commenting on a successful tip...')
 		return False
 
 #  Attempt to post any comments that failed to post the first time (generally due to reddit API restricting posting too many comments too quickly)
 def processUnsent():
+	unsentTipFailureCount = len(unsentTipFailures)
+	unsentTipSuccessCount = len(unsentTipSuccesses)
+	if (unsentTipSuccessCount == 0 and unsentTipSuccessCount == 0): return
+	
+	tipbitUtilities.ConsolePrint('Attempting to process unsent. [{} | {}]'.format(unsentTipFailureCount, unsentTipSuccessCount))
+
 	while (len(unsentTipFailures) > 0):
 		failure = unsentTipFailures[0]
-		if (CommentReply_TipFailure(failure[0], failure[1], failure[2], False) is False):
-			break
-		AddEventString('Successfully sent a previously blocked comment')
+		if (CommentReply_TipFailure(failure[0], failure[1], failure[2], False) is False): break
+		tipbitWindow.AddEventString('Successfully sent a previously blocked comment')
 		unsentTipFailures.remove(failure)
 		
 	while len(unsentTipSuccesses) > 0:
 		success = unsentTipSuccesses[0]
-		if (CommentReply_TipSuccess(success[0], success[1], success[2], success[3], success[4], success[5], False) is False):
-			break
-		AddEventString('Successfully sent a previously blocked comment')
+		if (CommentReply_TipSuccess(success[0], success[1], success[2], success[3], success[4], success[5], False) is False): break
+		tipbitWindow.AddEventString('Successfully sent a previously blocked comment')
 		unsentTipSuccesses.remove(success)
 
 #  Process a sweep deposit, pushing money from a wallet with the given private key to our storage (to avoid the double transaction fee you get when using the normal deposit method)
 def ProcessSweepDeposit(message):
 	username = message.author.name.lower()
 	userAccount = reddit.redditor(username)
-	RegisterUser(username, False)
+	RegisterNewUser(username, False)
 	
-	AddEventString('Attempting Sweep Deposit: {}'.format(message.body))
-	sweepKey = Key(message.body)
-	sweepBalance = int(sweepKey.get_balance())
-	if (sweepBalance < botSpecificData.MINIMUM_WITHDRAWAL):
-		MINIMUM_DEPOSIT_MBTC = satoshi_to_currency(botSpecificData.MINIMUM_DEPOSIT, 'mbtc')
-		AddEventString('Failed to perform sweep deposit for user [{}] (balance under minimum deposit)'.format(username))
-		userAccount.message('Sweep Deposit failed!', messageTemplates.USER_FAILED_SWEEP_DEPOSIT_UNDER_MINIMUM_MESSAGE_TEXT.format(MINIMUM_DEPOSIT_MBTC))
+	tipbitWindow.AddEventString('Attempting Sweep Deposit: {}'.format(message.body))
+	if (tipbitUtilities.ImportPrivateKey(message.body, '', True) is False):
+		print('Failed to sweep private key "{}"'.format(message.body))
+		return
+	
+	legacyAddress = PrivateKeyTestnet(message.body).address if botSpecificData.testnet else PrivateKey(message.body).address
+	print('legacy sweep - {}'.format(legacyAddress))
+	segwitAddress = tipbitUtilities.GetUnusedAddressSegwit('', legacyAddress)
+	print('segwit sweep - {}'.format(segwitAddress))
+	
+	sweepAddress = ''
+	balanceList = tipbitUtilities.GetWalletBalancesList()
+	if 		(legacyAddress in balanceList): 	sweepAddress = legacyAddress
+	elif 	(segwitAddress in balanceList): 	sweepAddress = segwitAddress
+	
+	if (sweepAddress == ''):
+		print('Attempted sweep of empty wallet. Cancelling Sweep Deposit for {}'.format(username))
+		return
+	
+	print('Balance found at sweep address: {}'.format(sweepAddress))
+	sweepBalance = tipbitUtilities.BTCToSatoshis(balanceList[sweepAddress])
+	
+	print('Sweep Balance: {} Satoshis'.format(sweepBalance))
+
+	if (sweepBalance < botSpecificData.MINIMUM_DEPOSIT):
+		MINIMUM_DEPOSIT_MBTC = tipbitUtilities.SatoshisToMBTC(botSpecificData.MINIMUM_DEPOSIT)
+		tipbitWindow.AddEventString('Failed to perform sweep deposit for user [{}] (balance under minimum deposit)'.format(username))
+		userAccount.message('Sweep Deposit failed!', messageTemplates.USER_FAILED_SWEEP_DEPOSIT_UNDER_MINIMUM_MESSAGE_TEXT.format(MINIMUM_DEPOSIT_MBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		return False
 
 	#  Attempt to prepare a transaction so we can determine the fee to take out so the user eats the cost
 	depositBalance = sweepBalance
-	storageTX = []
-	estimatedFee = DetermineFee(sweepKey, STORAGE_ADDRESS, depositBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
+	storageTX = ''
+	estimatedFee, storageTX = tipbitUtilities.SendFromAddressToAddress(sweepAddress, botSpecificData.PRIMARY_STORAGE_ADDRESS, depositBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
 	newDepositDelta = depositBalance - estimatedFee
 	
-	depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
-	estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
-	newDepositDeltaMBTC = satoshi_to_currency(newDepositDelta, 'mbtc')
+	depositBalanceMBTC = tipbitUtilities.SatoshisToMBTC(depositBalance)
+	estimatedFeeMBTC = tipbitUtilities.SatoshisToMBTC(estimatedFee)
+	newDepositDeltaMBTC = tipbitUtilities.SatoshisToMBTC(newDepositDelta)
 	
 	#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
-	storageTX = SendBitcoin(sweepKey, STORAGE_ADDRESS, depositBalance, estimatedFee, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE, "Sweep Deposit")
-	if (storageTX is not ''):
-		addToUserBalance(username, newDepositDelta)
-		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		AddEventString('Sweep Deposit successfully sent to storage: {} mBTC'.format(satoshi_to_currency(newDepositDelta, 'mbtc')))
-		reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_SWEEP_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
-	else:
-		reddit.redditor(username).message('Your deposit was unuccessful!', messageTemplates.USER_FAILED_SWEEP_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
-		
+	addToUserBalance(username, int(newDepositDelta))
+	balanceMBTC = tipbitUtilities.SatoshisToMBTC(getUserBalance(username))
+	tipbitWindow.AddEventString('Sweep Deposit successfully sent to storage: {} mBTC{}'.format(tipbitUtilities.SatoshisToMBTC(newDepositDelta), (' Testnet Bitcoins' if botSpecificData.testnet else '')))
+	userAccount.message('Your deposit was successful!', messageTemplates.USER_NEW_SWEEP_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), storageTX))
+
+	tipbitUtilities.SetAddressToAccount(legacyAddress, '')
+	tipbitUtilities.SetAddressToAccount(segwitAddress, '')
+	
 	#  Return True so that we know to 
 	return True
 
 #  Process a withdrawal request, sending the bitcoin to their specified withdrawal address
 def ProcessWithdraw(message, trueWithdrawal):
+	global primaryStorageBalance
 	username = message.author.name.lower()
-	failedWithdrawalSubject = 'Failed Withdrawal'+('' if trueWithdrawal else ' Test')
 	
 	#  Split the message and grab the address and amount from it, if it is formatted correctly
 	messageBody = message.body
@@ -527,56 +345,62 @@ def ProcessWithdraw(message, trueWithdrawal):
 	userBalance = getUserBalance(username)
 	
 	#  Allow the user to put ALL in as a value, and take the entire balance in that case
-	if (amountStringMBTC == "ALL"):
-		amountStringMBTC = satoshi_to_currency(userBalance, 'mbtc')
+	if (amountStringMBTC == 'ALL'):
+		amountStringMBTC = tipbitUtilities.SatoshisToMBTC(userBalance)
+		
+	print('User {} attempting to withdraw {}'.format(username, amountStringMBTC))
 	
 	#  Check that the address and amount are formatted correctly
-	if ((GetAddressIsValid(withdrawalAddress) is False) or (amountStringMBTC.replace('.','',1).isdigit() is False)):
-		AddEventString('Failed to withdraw \'{}\' to \'{}\''.format(amountStringMBTC, withdrawalAddress))
+	if (isinstance(amountStringMBTC, str) and amountStringMBTC.replace('.','',1).isdigit() is False):
+		failedWithdrawalSubject = 'Failed Withdrawal' + ('' if trueWithdrawal else ' Test')
+		tipbitWindow.AddEventString('Failed to withdraw \'{}\' to \'{}\''.format(amountStringMBTC, withdrawalAddress))
 		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_MESSAGE_TEXT.format(amountStringMBTC, withdrawalAddress))
 		return False
 		
 	#  Check that the amount is above or equal to the minimum withdrawal
-	amount = currency_to_satoshi_cached(amountStringMBTC, 'mbtc')
-	amountMBTC = satoshi_to_currency(amount, 'mbtc')
+	amount = tipbitUtilities.MBTCToSatoshis(Decimal(amountStringMBTC))
+	amountMBTC = tipbitUtilities.SatoshisToMBTC(amount)
 	if (amount < botSpecificData.MINIMUM_WITHDRAWAL):
-		AddEventString('/u/{} failed to withdraw \'{}\' mBTC (below minimum withdrawal value)'.format(username, amountMBTC))
-		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, botSpecificData.MINIMUM_WITHDRAWAL))
+		tipbitWindow.AddEventString('/u/{} failed to withdraw \'{}\' mBTC (below minimum withdrawal value)'.format(username, amountMBTC))
+		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_BELOW_MINIMUM_MESSAGE_TEXT.format(amountMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), botSpecificData.MINIMUM_WITHDRAWAL, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		return False
 		
 	#  Check that the amount requested is in the user balance
 	if (amount > userBalance):
-		balanceMBTC = satoshi_to_currency(userBalance, 'mbtc')
-		AddEventString('/u/{} failed to withdraw \'{}\' mBTC (insufficient balance of {})'.format(username, amountMBTC, balanceMBTC))
-		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_LOW_BALANCE_MESSAGE_TEXT.format(amountMBTC, balanceMBTC))
+		balanceMBTC = tipbitUtilities.SatoshisToMBTC(userBalance)
+		tipbitWindow.AddEventString('/u/{} failed to withdraw \'{}\' mBTC (insufficient balance of {})'.format(username, amountMBTC, balanceMBTC))
+		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_LOW_BALANCE_MESSAGE_TEXT.format(amountMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		return False
 	
-	AddEventString('Attempting to withdraw {} mBTC from storage. Storage balance: {}'.format(amountMBTC, storageKey.get_balance('mbtc')))
+	tipbitWindow.AddEventString('Attempting to withdraw {} mBTC. Storage balance: {} satoshis'.format(amountMBTC, primaryStorageBalance))
 	
 	#  Attempt to prepare the transaction so we can determine the fee
-	estimatedFee = DetermineFee(storageKey, withdrawalAddress, amount, botSpecificData.WITHDRAWAL_FEE_PER_BYTE)
-	estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
+	sentTX = ''
+	estimatedFee, sentTX = tipbitUtilities.SendFromAddressToAddress(botSpecificData.PRIMARY_STORAGE_ADDRESS, withdrawalAddress, tipbitUtilities.SatoshisToBTC(amount), botSpecificData.WITHDRAWAL_FEE_PER_BYTE, True)
+	estimatedFeeMBTC = tipbitUtilities.SatoshisToMBTC(estimatedFee)
 	
 	#  If the fee is more than the amount, we can't transfer any bitcoin
 	if (amount <= estimatedFee):
-		AddEventString('/u/{} failed to withdraw \'{}\' (fee is greater than amount)'.format(username, amountMBTC))
-		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_FEE_TOO_HIGH_MESSAGE_TEXT.format(amount, estimatedFeeMBTC))
+		tipbitWindow.AddEventString('/u/{} failed to withdraw \'{}\' (fee is greater than amount)'.format(username, amountMBTC))
+		reddit.redditor(username).message(failedWithdrawalSubject, messageTemplates.USER_FAILED_WITHDRAW_FEE_TOO_HIGH_MESSAGE_TEXT.format(amount, (' Testnet Bitcoins' if botSpecificData.testnet else ''), estimatedFeeMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		return False
 		
 	#  If trueWithdrawal is False, we should just message the withdrawal data and not send the transaction
 	if (trueWithdrawal is False):
-		reddit.redditor(username).message('Withdrawal Test', messageTemplates.USER_WITHDRAWAL_TEST_MESSAGE_TEXT.format(amountMBTC, estimatedFeeMBTC))
+		reddit.redditor(username).message('Withdrawal Test', messageTemplates.USER_WITHDRAWAL_TEST_MESSAGE_TEXT.format(amountMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), estimatedFeeMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		return False
 	
 	#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
-	AddEventString('Sending {} satoshis and paying {} satoshis for the fee'.format(amount, estimatedFee))
-	if SendBitcoin(storageKey, withdrawalAddress, amount, estimatedFee, botSpecificData.WITHDRAWAL_FEE_PER_BYTE, "Basic Deposit"):
-		amountMinusFees = amount - estimatedFee
-		amountMinusFeeMBTC = satoshi_to_currency(amountMinusFees, 'mbtc')
-		addToUserBalance(username, amount * -1)
-		balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-		AddEventString('{} withdraw {} mBTC ({} + {} fee)'.format(username, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
-		reddit.redditor(username).message('Your withdrawal was successful!', messageTemplates.USER_SUCCESS_WITHDRAW_MESSAGE_TEXT.format(amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC, amountMBTC, balanceMBTC, storageTX))
+	tipbitWindow.AddEventString('Sending {} satoshis and paying {} satoshis for the fee'.format(amount, estimatedFee))
+	result, sentTX = tipbitUtilities.SendFromAddressToAddress(botSpecificData.PRIMARY_STORAGE_ADDRESS, withdrawalAddress, tipbitUtilities.SatoshisToBTC(amount - estimatedFee), botSpecificData.WITHDRAWAL_FEE_PER_BYTE)
+	print('Withdrawal result: {}'.format(result)) #  TODO: Test failed withdrawal due to bad address
+	
+	amountMinusFees = amount - estimatedFee
+	amountMinusFeeMBTC = tipbitUtilities.SatoshisToMBTC(amountMinusFees)
+	addToUserBalance(username, amount * -1)
+	balanceMBTC = tipbitUtilities.SatoshisToMBTC(getUserBalance(username))
+	tipbitWindow.AddEventString('{} withdrew {} mBTC {}({} + {} fee)'.format(username, amountMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), amountMinusFeeMBTC, estimatedFeeMBTC))
+	reddit.redditor(username).message('Your withdrawal was successful!', messageTemplates.USER_SUCCESS_WITHDRAW_MESSAGE_TEXT.format(amountMBTC, estimatedFeeMBTC, amountMinusFeeMBTC, balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		
 	return True
 
@@ -595,159 +419,43 @@ def DetermineFee(senderKey, destinationAddress, amount, satoshisPerByte):
 def SendBitcoin(senderKey, targetAddress, amount, estimatedFee, satoshisPerByte, transactionReason):
 	amountMinusFee = amount - estimatedFee
 	try:
-		AddEventString('Sending {} satoshis'.format(amountMinusFee))
-		tx = senderKey.send([(targetAddress, amountMinusFee, 'satoshi')], satoshisPerByte, STORAGE_ADDRESS)
-		AddEventString('Transaction successful: {}'.format(tx))
+		tipbitWindow.AddEventString('Sending {} Satoshis'.format(amountMinusFee))
+		tx = senderKey.send([(targetAddress, amountMinusFee, 'satoshi')], satoshisPerByte, botSpecificData.PRIMARY_STORAGE_ADDRESS)
+		tipbitWindow.AddEventString('Transaction successful: {}'.format(tx))
 		return tx
 	except Exception as ex:
-		amountMBTC = satoshi_to_currency(amount, 'mbtc')
-		estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
-		amountMinusFeeMBTC = satoshi_to_currency(satoshisPerByte, 'mbtc')
-		AddEventString('{} transaction of {} mBTC failed ({} + {} fee)'.format(transactionReason, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
-		tipbit_utilities.ConsolePrint("An exception of type {0} occurred.".format(type(ex).__name__))
-		tipbit_utilities.ConsolePrint(ex.args)
+		amountMBTC = tipbitUtilities.SatoshisToMBTC(amount)
+		estimatedFeeMBTC = tipbitUtilities.SatoshisToMBTC(estimatedFee)
+		amountMinusFeeMBTC = tipbitUtilities.SatoshisToMBTC(satoshisPerByte)
+		tipbitWindow.AddEventString('{} transaction of {} mBTC failed ({} + {} fee)'.format(transactionReason, amountMBTC, amountMinusFeeMBTC, estimatedFeeMBTC))
+		tipbitUtilities.ConsolePrint("An exception of type {0} occurred.".format(type(ex).__name__))
+		tipbitUtilities.ConsolePrint(ex.args)
 		return ""
 
 #  Process a balance request from a user, letting them know their current balance
 def ProcessBalance(username):
 	#  If the user is not registered, inform them of this
 	if (username not in userBalances):
-		reddit.redditor(username).message('Balance Check', messageTemplates.USER_BALANCE_NOT_REGISTERED_MESSAGE_TEXT)
+		reddit.redditor(username).message('Balance Check', messageTemplates.USER_BALANCE_NOT_REGISTERED_MESSAGE_TEXT.format(botSpecificData.BOT_REGISTER_PM_LINK))
 		return False
 		
 	balance = userBalances[username]
-	balanceMBTC = satoshi_to_currency(balance, 'mbtc')
-	reddit.redditor(username).message('Balance Check', messageTemplates.USER_BALANCE_MESSAGE_TEXT.format(balanceMBTC))
-	AddEventString('User checked balance: {} [{} mBTC]'.format(username, balanceMBTC))
+	balanceMBTC = tipbitUtilities.SatoshisToMBTC(balance)
+	reddit.redditor(username).message('Balance Check', messageTemplates.USER_BALANCE_MESSAGE_TEXT.format(balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), userDepositAddressesSegwit[username], userDepositAddressesSegwit[username], userDepositAddressesLegacy[username], userDepositAddressesLegacy[username]))
+	tipbitWindow.AddEventString('User checked balance: {} [{} mBTC{}]'.format(username, balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
 		
-def GetAddressIsValid(address):
-	try:
-		balance = NetworkAPI.get_balance(address)
-		return True
-	except ConnectionError:
-		return False
+##### UTILITIES
 		
-def GetAddressBalance(address):
-	try:
-		addressBalance = NetworkAPI.get_balance(address)
-		return addressBalance
-	except ConnectionError:
-		AddEventString('Failed to get balance for address: {}'.format(address))
-		return 0.0
-
-#  Check the list of user deposit addresses
-def processDeposits():
-	for key in userKeyStructsCopy:
-		processSingleDeposit(key)
-		
-#  Check for solvency (add up tip balances, check against main storage
-def checkSolvency():
-	global userBalancesCopy
-	global allTipBalanceTotal
-	global storageBalance
-	global lastSolvencyDiff
+def ParseExistingAddresses():
+	tipbitUtilities.ClaimExistingUserAddresses(userPrivateKeys, userDepositAddressesLegacy, userDepositAddressesSegwit)
+	tipbitUtilities.ExportUserDepositAddressesSegwitJson(userDepositAddressesSegwit)
 	
-	allTipBalanceTotal = 0
-	for user in userBalancesCopy: allTipBalanceTotal += userBalancesCopy[user]
-	
-	storageBalance = tipbit_utilities.get_balance(STORAGE_ADDRESS)
-	if storageBalance is None:
-		tipbit_utilities.ConsolePrint('Failed to retrieve storage balance')
-		return
-
-	if ((allTipBalanceTotal - storageBalance) == lastSolvencyDiff): return
-		
-	lastSolvencyDiff = (allTipBalanceTotal - storageBalance)
-	unconfirmedDelta = tipbit_utilities.get_unconfirmed_delta(STORAGE_ADDRESS)
-	
-	solvencyConfirmed = ((lastSolvencyDiff == 0) or (lastSolvencyDiff == unconfirmedDelta))
-	AddEventString('SOLVENCY CONFIRMED' if solvencyConfirmed else 'Solvency report: tb[{}], st[{}], sd[{}], ud[{}]'.format(allTipBalanceTotal, storageBalance, lastSolvencyDiff, unconfirmedDelta), False)
-	
-	if (unconfirmedDelta != 0): pendingStorageList.append('{}'.format(unconfirmedDelta))
-
-#  If the deposit address for the given key has above the minimum balance of bitcoin in it, sweep the balance to storage and update the user's balance
-def processSingleDeposit(username):
-	try:
-		global userDepositAddressesCopy
-		senderKey = userKeyStructsCopy[username]
-		senderAddress = userDepositAddressesCopy[username]
-		depositBalance = int(senderKey.get_balance())
-		secondaryCheck = int(tipbit_utilities.get_balance(senderAddress))
-		
-		if secondaryCheck is None:
-			tipbit_utilities.ConsolePrint('Failed to retrieve deposit balance for user')
-			return False
-		
-		#  If the amount in the wallet is empty or smaller than the minimum deposit value, there is no new deposit
-		if (depositBalance <= botSpecificData.MINIMUM_DEPOSIT):
-			return False
-		
-		#  If the two checks have different values, display an error and return out (this means money is transferring)
-		if (depositBalance != secondaryCheck):
-			unconfirmedDelta = tipbit_utilities.get_unconfirmed_delta(senderAddress)
-			if (depositBalance != unconfirmedDelta):
-				AddEventString('Address {} balance check mismatch: ({} | {})'.format(senderAddress, depositBalance, secondaryCheck), False, True)
-			else:
-				pendingDepositList.append("{}: {}".format(username, unconfirmedDelta))
-			return False
-		
-		#  Gather a list of unprocessed deposit transactions
-		newDepositList = {}
-		try:
-			depositTransactionList = BlockchainAPI.get_transactions(senderKey.address)
-			if (depositTransactionList is ""):
-				AddEventString("Could not load transaction list", True, True)
-				return False
-			
-			for tx in depositTransactionList:
-				if (tx in depositTransactionList):
-					break
-				else:
-					newDepositList[tx] = depositTransactionList[tx]
-		except json.decoder.JSONDecodeError:
-			tipbit_utilities.ConsolePrint("JSON decoding error when attempting to load transactions for {}".format(username))
-			return False
-		except requests.exceptions.ReadTimeout:
-			tipbit_utilities.ConsolePrint("Read timeout error when attempting to load transactions for {}".format(username))
-			return False
-		
-		#  If we have no new deposits, we're just detecting already processed deposits and can ignore them
-		if (len(newDepositList) == 0):
-			return False
-		
-		depositBalanceMBTC = satoshi_to_currency(depositBalance, 'mbtc')
-		AddEventString('Deposit detected in {}\'s account: {} mBTC'.format(username, depositBalanceMBTC), True, True)
-		
-		#  Attempt to prepare a transaction so we can determine the fee to take out so the user eats the cost
-		estimatedFee = DetermineFee(senderKey, STORAGE_ADDRESS, depositBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
-		
-		#  Now we should have an estimated fee, so we can subtract that from the amount we're sending, and transfer it
-		storageTX = SendBitcoin(senderKey, STORAGE_ADDRESS, depositBalance, estimatedFee, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE, "Basic Deposit")
-		if (storageTX is not ''):
-			newDepositDelta = depositBalance - estimatedFee
-			estimatedFeeMBTC = satoshi_to_currency(estimatedFee, 'mbtc')
-			newDepositDeltaMBTC = satoshi_to_currency(newDepositDelta, 'mbtc')
-			addToUserBalance(username, newDepositDelta)
-			balanceMBTC = satoshi_to_currency(getUserBalance(username), 'mbtc')
-			AddEventString('Deposit successfully sent to storage: {} mBTC'.format(newDepositDeltaMBTC), True, True)
-			reddit.redditor(username).message('Your deposit was successful!', messageTemplates.USER_NEW_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, storageTX))
-			AddUserDepositTransaction(storageTX, username);
-			
-		#  Return True so that we know to remove this deposit from the queue
-		return True
-
-	except ConnectionError:
-		AddEventString("ConnectionError occurred during deposit processing", False)
+	tipbitUtilities.SaveOffUnusedAddresses(UnusedAddressesLegacy, UnusedAddressesSegwit)
+	tipbitUtilities.SaveOffUsedAddresses(UsedAddressesLegacy, UsedAddressesSegwit)
 
 def getUserBalance(username):
-	RegisterUser(username, False, True)
+	if not isUserRegistered(username): RegisterNewUser(username, False, True)
 	return userBalances[username]
-	
-def addToUserBalance(username, amount, export=True):
-	RegisterUser(username, False)
-	userBalances[username] += amount
-	if export:
-		ExportUserBalancesJson()
 	
 def isBalanceSufficient(username, amount):
 	if (getUserBalance(username) >= amount):
@@ -763,101 +471,247 @@ def processSingleTip(sender_name, target_name, amount):
 		return True
 	else:
 		return False
-
-def isUserRegistered(username):
-	if (username in userBalances):
-		return True
-	else:
-		return False
+	
+def addToUserBalance(username, satoshis, export = True):
+	if not isUserRegistered(username): RegisterNewUser(username, False, True)
+	userBalances[username] += int(satoshis)
+	
+	if export:
+		tipbitUtilities.ExportUserBalancesJson(userBalances)
 		
-def RegisterUser(username, isMessage, quickReg=False):
-	alreadyRegistered = False
-	if (isUserRegistered(username)):
-		alreadyRegistered = True
-	else:
-		CreateUserData(username)
+	return userBalances[username]
+	
+def isUserRegistered(username):
+	return (username in userBalances)
+	
+def RegisterNewUser(username, isMessage, quickReg=False):
+	username = username.lower()
+	alreadyRegistered = isUserRegistered(username)
+	if alreadyRegistered is False: CreateUserData(username)
+	
+	balance = getUserBalance(username)
+	balanceMBTC = tipbitUtilities.SatoshisToMBTC(balance)
+	
+	if ((alreadyRegistered is False) and (isMessage is False)):
+		reddit.redditor(username).message('Registration', messageTemplates.USER_AUTO_REGISTRATION_MESSAGE_TEXT.format(userDepositAddressesSegwit[username], userDepositAddressesSegwit[username], userDepositAddressesLegacy[username], userDepositAddressesLegacy[username]))
 		
 	if quickReg:
 		return True
 	
 	#  PM the registered user with their balance and deposit address. Mention if they were already registered and attempted to register by PM
 	balance = getUserBalance(username)
-	balanceMBTC = satoshi_to_currency(balance, 'mbtc')
-	if (alreadyRegistered is True):
-		if (isMessage is True):
-			reddit.redditor(username).message('Registration', messageTemplates.USER_ALREADY_REGISTERED_REPLY_TEXT.format(balanceMBTC, userDepositAddresses[username], userDepositAddresses[username]))
-	else:
-		if (isMessage is True):
-			reddit.redditor(username).message('Registration', messageTemplates.USER_NEW_REGISTRATION_REPLY_TEXT.format(balanceMBTC, userDepositAddresses[username], userDepositAddresses[username]))
+	balanceMBTC = tipbitUtilities.SatoshisToMBTC(balance)
+	if (isMessage is True):
+		tipbitWindow.AddEventString("Registration message processed: {} {}".format(username, ("(already registered)" if alreadyRegistered else "")))
+		if (alreadyRegistered is True):
+			reddit.redditor(username).message('Registration', messageTemplates.USER_ALREADY_REGISTERED_REPLY_TEXT.format(userDepositAddressesSegwit[username], userDepositAddressesSegwit[username], userDepositAddressesLegacy[username], userDepositAddressesLegacy[username]))
 		else:
-			reddit.redditor(username).message('Registration', messageTemplates.USER_AUTO_REGISTRATION_MESSAGE_TEXT.format(balanceMBTC, userDepositAddresses[username], userDepositAddresses[username]))
-	
-	if (isMessage):
-		AddEventString("Registration message processed: {} {}".format(username, ("(already registered)" if alreadyRegistered else "")))
+			reddit.redditor(username).message('Registration', messageTemplates.USER_NEW_REGISTRATION_REPLY_TEXT.format(userDepositAddressesSegwit[username], userDepositAddressesSegwit[username], userDepositAddressesLegacy[username], userDepositAddressesLegacy[username]))
 	
 #  Create the basic user, then export all of the data
 def CreateUserData(username):
+	username = username.lower()
+	newAddressLegacy = tipbitUtilities.GetUnusedAddressLegacy(UnusedAddressesLegacy, username)
+	newAddressSegwit = tipbitUtilities.GetUnusedAddressSegwit(username + ' Segwit', newAddressLegacy)
+	
 	userBalances[username] = 0
-	userKeyStructs[username] = Key()
-	userPrivateKeys[username] = userKeyStructs[username].to_wif()
-	userDepositAddresses[username] = userKeyStructs[username].address
-	ExportUserBalancesJson()
-	ExportUserDepositAddressesJson()
-	ExportUserPrivateKeysJson()
+	userDepositAddressesLegacy[username] = newAddressLegacy
+	userDepositAddressesSegwit[username] = newAddressSegwit
+	userPrivateKeys[username] = tipbitUtilities.GetPrivateKeyFromAddress(newAddressLegacy)
 	
-#  Add user transaction
-def AddUserDepositTransaction(storageTX, username):
-	userDepositTransactions[storageTX] = username
-	ExportUserDepositTransactionsJson()
+	tipbitUtilities.ExportUserBalancesJson(userBalances)
+	tipbitUtilities.ExportUserDepositAddressesLegacyJson(userDepositAddressesLegacy)
+	tipbitUtilities.ExportUserDepositAddressesSegwitJson(userDepositAddressesSegwit)
+	tipbitUtilities.ExportUserPrivateKeysJson(userPrivateKeys)
 	
-##  BALANCES EXPORT AND IMPORT
-def ExportUserBalancesJson():
-	with open('UserBalances.json', 'w') as f:
-		json.dump(userBalances, f)
+	print('Registered {}:'.format(username))
+	print(' - Legacy: {}'.format(newAddressLegacy))
+	print(' - Segwit: {}'.format(newAddressSegwit))
+	
+##### PythonRPC Primary Code
 
-def ImportUserBalancesJson():
-	if os.path.isfile("UserBalances.json"):
-		with open("UserBalances.json", "rb") as f:
-			balances = json.load(f)
-			for balance in balances:
-				userBalances[balance] = balances[balance]
+def ImportUserData():
+	tipbitUtilities.ImportUserBalancesJson(userBalances, True)
+	tipbitUtilities.ImportUserDepositAddressesLegacyJson(userDepositAddressesLegacy)
+	tipbitUtilities.ImportUserDepositAddressesSegwitJson(userDepositAddressesSegwit)
+	tipbitUtilities.ImportUserPrivateKeysJson(userPrivateKeys)
+
+def CheckForUserDeposits():
+	global primaryStorageBalance
+	walletBalances = tipbitUtilities.GetWalletBalancesList()
+	addressToAccounts = tipbitUtilities.GetAddressToAccountList()
+	
+	for wallet in walletBalances:
+		if wallet == botSpecificData.PRIMARY_STORAGE_ADDRESS:
+			primaryStorageBalance = tipbitUtilities.BTCToSatoshis(walletBalances[wallet])
+			continue
+			
+		if wallet not in addressToAccounts: continue
+		if addressToAccounts[wallet] == '': continue
 		
-##  DEPOSIT ADDRESSES EXPORT AND IMPORT
-def ExportUserDepositAddressesJson():
-	with open('UserDepositAddresses.json', 'w') as f:
-		json.dump(userDepositAddresses, f)
-
-def ImportUserDepositAddressesJson():
-	if os.path.isfile("UserDepositAddresses.json"):
-		with open("UserDepositAddresses.json", "rb") as f:
-			addresses = json.load(f)
-			for username in addresses:
-				userDepositAddresses[username] = addresses[username]	
+		# Get the account name (take out ' Segwit' if it exists)
+		accountName = addressToAccounts[wallet]
+		account = accountName[:-7] if (' Segwit' in accountName) else accountName
+		userAccount = reddit.redditor(account)
+		
+		walletBalance = walletBalances[wallet]
+		walletBalanceSatoshis = tipbitUtilities.BTCToSatoshis(walletBalance)
+		if (walletBalanceSatoshis < botSpecificData.MINIMUM_DEPOSIT): continue
+		
+		print('Wallet balance detected: {} ({})'.format(account, walletBalance))
+		
+		sentTX = ''
+		fee, sentTX = tipbitUtilities.SendFromAddressToAddress(wallet, botSpecificData.PRIMARY_STORAGE_ADDRESS, walletBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
+		walletBalanceSatoshis = tipbitUtilities.BTCToSatoshis(walletBalances[wallet])
+		print('Sent {} satoshis with fee of {} satoshis to Storage'.format(walletBalanceSatoshis - fee, fee))
+		
+		balanceDelta = walletBalanceSatoshis - fee
+		userBalances[account] += int(balanceDelta)
+		print('Updated User Balance ({} + {}): {}\n'.format(account, balanceDelta,  userBalances[account]))
+		
+		depositBalanceMBTC = tipbitUtilities.SatoshisToMBTC(walletBalanceSatoshis)
+		estimatedFeeMBTC = tipbitUtilities.SatoshisToMBTC(fee)
+		newDepositDeltaMBTC = depositBalanceMBTC - estimatedFeeMBTC
+		balanceMBTC = tipbitUtilities.SatoshisToMBTC(userBalances[account])
+		userAccount.message('Your deposit was successful!', messageTemplates.USER_NEW_DEPOSIT_MESSAGE_TEXT.format(depositBalanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), depositBalanceMBTC, estimatedFeeMBTC, newDepositDeltaMBTC, balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), sentTX))
+		
+		tipbitUtilities.ExportUserBalancesJson(userBalances)
+		
+		UpdateGUI()
 	
-##  PRIVATE KEY EXPORT AND IMPORT
-def ExportUserPrivateKeysJson():
-	with open('UserPrivateKeys.json', 'w') as f:
-		json.dump(userPrivateKeys, f)
-
-def ImportUserPrivateKeysJson():
-	if os.path.isfile("UserPrivateKeys.json"):
-		with open("UserPrivateKeys.json", "rb") as f:
-			usersToKeys = json.load(f)
-			for username in usersToKeys:
-				userPrivateKeys[username] = usersToKeys[username]
-				userKeyStructs[username] = Key(userPrivateKeys[username])
+	
+def UpdateBalancesAndSolvency():
+	global primaryStorageBalance
+	global primaryTipBalance
+	global primarySolvencyDiff
+	
+	walletBalances = tipbitUtilities.GetWalletBalancesList()
+	primaryStorageBalance = tipbitUtilities.BTCToSatoshis(walletBalances[botSpecificData.PRIMARY_STORAGE_ADDRESS])
+	
+	primaryTipBalance = 0
+	for user in userBalances: primaryTipBalance += userBalances[user]
+	
+	primarySolvencyDiff = 0
+	if (primaryTipBalance != primaryStorageBalance): primarySolvencyDiff = primaryTipBalance - primaryStorageBalance
+		
+def UpdateGUI():
+	global primaryStorageBalance
+	global primaryTipBalance
+	global primarySolvencyDiff
+	
+	UpdateBalancesAndSolvency()
+	tipbitWindow.SetGUITipBalanceString(primaryTipBalance)
+	tipbitWindow.SetGUIStorageBalanceString(primaryStorageBalance)
+	tipbitWindow.SetGUISolvencyDiffString(primarySolvencyDiff)
+		
+def mainLoop():
+	currentTime = time.time()
+	lastMainLoopTime 		= currentTime
+	lastUnsentCheckTime 	= currentTime
+	lastSolvencyCheckTime 	= currentTime
+	lastDepositCheckTime 	= currentTime
+	lastBitcoinValueTime 	= currentTime
+	lastUpdateGUITime 		= currentTime
+	
+	global storageListbox
+	global depositsListbox
+	
+	global userBalancesCopy
+	global userDepositAddressesCopy
+	solvencyThread = 0
+	depositsThread = 0
+	
+	while (True):
+		try:
+			currentTime = time.time()
 				
-##  USER DEPOSIT TRANSACTIONS EXPORT AND IMPORT
-def ExportUserDepositTransactionsJson():
-	with open('userDepositTransactions.json', 'w') as f:
-		json.dump(userDepositTransactions, f)
-
-def ImportUserDepositTransactionsJson():
-	if os.path.isfile("userDepositTransactions.json"):
-		with open("userDepositTransactions.json", "rb") as f:
-			transactionsToUsers = json.load(f)
-			for username in transactionsToUsers:
-				userDepositTransactions[username] = transactionsToUsers[username]
+			#  Get the latest bitcoin price
+			if (currentTime > lastBitcoinValueTime):
+				tipbitUtilities.GetBitcoinValue(True, primaryTipBalance)
+				lastBitcoinValueTime = currentTime + 1800.0
+			
+			#  Check for the ESCAPE key, Balance Key (b), and Space Key (spacebar)
+			tipbitUtilities.checkForInput(userBalances)
+			
+			#  Update the window's processing loop and process the event queue
+			tipbitWindow.ProcessEventQueue()
+			tipbitWindow.UpdateWindow()
+				
+			#  Run the main loop every 3.0 seconds
+			if (currentTime < lastMainLoopTime): continue
+			lastMainLoopTime = currentTime + 3.0
+					
+			#  Collect all unread mentions and messages
+			gatherUnreads()
+			
+			#  Display any change in the current unread or unsent count
+			displayUnreadUnsentCount()
+			
+			#  Attempt to re-post comments that failed to post if at least 10 seconds has gone by
+			if (currentTime > lastUnsentCheckTime):
+				processUnsent()
+				lastUnsentCheckTime = currentTime + 10.0
+			
+			#  Check the next 5 messages
+			processMessages()
+			
+			#  Check the next 5 comments
+			processComments()
+			
+			#  Check for user deposits and send them to Storage after crediting account
+			CheckForUserDeposits()
+			
+			#  Update the GUI with user balance, storage total, solvency diff, and any events that have transpired
+			UpdateGUI()
+			
+		except ConnectionError:
+			tipbitWindow.AddEventString("ConnectionError occurred during processing...", False)
+		except RequestException:
+			tipbitWindow.AddEventString('RequestException on processing unreads (likely a connection error)', False)
+	
+#  Gather all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
+def gatherUnreads():
+	global allUnread
+	global markedRead
+	allUnread = reddit.inbox.unread(limit=1)
+	try:
+		for item in allUnread:
+			if (item in markedRead):
+				tipbitWindow.AddEventString("reddit.inbox.unread is returning items after they're marked read... something is wrong")
+				continue
+			try:
+				if isinstance(item, Message):
+					unreadMessages.append(item)
+				elif isinstance(item, Comment):
+					unreadMentions.append(item)
+			except urllib3.exceptions.ReadTimeoutError:
+				tipbitWindow.AddEventString('ReadTimeoutError on processing of unread messages and comments...')
+			except ssl.SSLError:
+				tipbitWindow.AddEventString('SSL error on processing of unread messages and comments...')
+			except Exception as e:
+				tipbitUtilities.ConsolePrint(e)
+				tipbitWindow.AddEventString('Unknown exception on processing of unread messages and comments...')
+	except RequestException:
+		tipbitWindow.AddEventString('RequestException on processing unreads (likely a connection error)', False)
+	
+	for item in unreadMessages: markedRead.append(item)
+	for item in unreadMentions: markedRead.append(item)
+	reddit.inbox.mark_read(unreadMessages)
+	reddit.inbox.mark_read(unreadMentions)
+	
+#  Display the current count of mentions, messages, and comments
+def displayUnreadUnsentCount():
+	global unreadMentionCount
+	global unreadMessageCount
+	global unsentCommentCount
+	if ((len(unreadMentions) is not unreadMentionCount) or (len(unreadMessages) is not unreadMessageCount) or ((len(unsentTipFailures) + len(unsentTipSuccesses)) is not unsentCommentCount)):
+		tipbitUtilities.ConsolePrint("Comments / Messages / Unsent: [{}, {}, {}]".format(len(unreadMentions), len(unreadMessages), (len(unsentTipFailures) + len(unsentTipSuccesses))))
+	unreadMentionCount = len(unreadMentions)
+	unreadMessageCount = len(unreadMessages)
+	unsentCommentCount = len(unsentTipFailures) + len(unsentTipSuccesses)
+	
+	
+##### 
 
 if __name__ == '__main__':
     main()
