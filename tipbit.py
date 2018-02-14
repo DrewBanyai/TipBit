@@ -586,6 +586,14 @@ def UpdateBalancesAndSolvency():
 	global primarySolvencyDiff
 	
 	walletBalances = tipbitUtilities.GetWalletBalancesList()
+	if len(walletBalances) == 0:
+		print('GetWalletBalanceList() failed to return a list (connection error?). Skipping solvency check...')
+		return
+	
+	if (botSpecificData.PRIMARY_STORAGE_ADDRESS not in walletBalances):
+		tipbitUtilities.ImportPrivateKey(botSpecificData.PRIMARY_STORAGE_PRIVATE_KEY, 'PRIMARY STORAGE LEGACY' if botSpecificData.segwit else 'PRIMARY STORAGE', True)
+		tipbitUtilities.GetNewSegwitAddress('PRIMARY STORAGE' if botSpecificData.segwit else 'PRIMARY STORAGE SEGWIT', botSpecificData.PRIMARY_STORAGE_ADDRESS_LEGACY)
+			
 	primaryStorageBalance = tipbitUtilities.BTCToSatoshis(walletBalances[botSpecificData.PRIMARY_STORAGE_ADDRESS])
 	
 	primaryTipBalance = 0
