@@ -174,7 +174,8 @@ def processSingleComment(comment, commentBody):
 	
 	#  If this redditor isn't valid, comment on the failure and log the event
 	if tipbitUtilities.isRedditorValid(redditor) is False:
-		CommentReply_TipFailure(comment, messageTemplates.USERNAME_IS_REMOVED_OR_BANNED_TEXT.format(botSpecificData.BOT_USERNAME), targetName)
+		print('Check: Is {} banned on reddit? [{}]'.format(targetName, redditor))
+		CommentReply_TipFailure(comment, messageTemplates.USERNAME_IS_REMOVED_OR_BANNED_TEXT.format(botSpecificData.BOT_USERNAME, targetName), targetName)
 		tipbitWindow.AddEventString('Failed to tip {} (non-existent account)'.format(targetName))
 		processSingleComment(comment, next_tip)
 		return
