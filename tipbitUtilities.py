@@ -155,15 +155,21 @@ def GetAccountBalance(account):
 	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (GetAccountBalance)')
 	return rpc_connection.getbalance(account, 3)
 		
-def ImportPrivateKey(privateKey, account = '', rescan = True):
+def ImportPrivateKey(privateKey, account = '', rescan = False):
 	try:
 		rpc_connection.importprivkey(privateKey, account, rescan)
 		return True
+	except CannotSendRequest:
+		print('CannotSendRequest in ImportPrivateKey on key {}'.format(privateKey))
+		return False
 	except JSONRPCException:
 		print('JSONRPCException in ImportPrivateKey on key {}'.format(privateKey))
 		return False
 	except ValueError:
 		print('ValueError in ImportPrivateKey on key {}'.format(privateKey))
+		return False
+	except timeout:
+		print('socket.timeout in ImportPrivateKey on key {}'.format(privateKey))
 		return False
 	
 def GetNewLegacyAddress(account):
@@ -176,8 +182,8 @@ def GetNewSegwitAddress(account, addressLegacy, printLegacy=False):
 		address = rpc_connection.addwitnessaddress(addressLegacy)
 		SetAddressToAccount(address, account)
 		return address
-	except socket.Timeouterror:
-		ConsolePrint('socket.Timeouterror on GetNewSegwitAddress().')
+	except timeout:
+		ConsolePrint('socket.timeout on GetNewSegwitAddress().')
 		return ''
 		
 	
@@ -189,7 +195,7 @@ def GetUnspentsList():
 		ConsolePrint('ConnectionAbortedError Exception in GetUnspentsList(). Returning blank list.')
 	except CannotSendRequest:
 		ConsolePrint('CannotSendRequest Exception in GetUnspentsList(). Returning blank list.')
-	except socket.Timeouterror:
+	except timeout:
 		ConsolePrint('Socket Timeout Error in GetUnspentsFromAddress...')
 	return unspentList
 	
@@ -204,11 +210,16 @@ def CreateRawTransaction(inputs, inputsTotal, address, amount, changeAddress, fe
 	
 	print('Creating raw transaction: [{} : {} : {}]'.format(amount, inputsTotal, feeBTC))
 	
+	#  Figure out the change. If it is less than 1000 satoshis, add it to the amount
+	change = inputsTotal - Decimal(amount) - feeBTC
+	if change <= Decimal(0.00001): amount += change
+	
 	outputs = {}
 	outputs[address] = amount
-	outputs[changeAddress] = inputsTotal - Decimal(amount) - feeBTC
+	if (change != 0): outputs[changeAddress] = change
 	
 	if printInAndOut:
+		print('{} ___ {} ___ {}'.format(inputsTotal, amount, feeBTC))
 		print('CreateRawTransaction Inputs:\n{}'.format(inputs))
 		print('CreateRawTransaction Outputs:\n{}'.format(outputs))
 	
@@ -235,7 +246,7 @@ def SendFromAddressToAddress(addressFrom, addressTo, amount, feePerByte, falseSe
 	unspentsFromAddress = GetUnspentsFromAddress(addressFrom)
 	unspentsTotal = GetUnspentsTotal(unspentsFromAddress)
 	print('SendFromAddressToAddress [{} : {}]'.format(amount, feePerByte))
-	rawTX = CreateRawTransaction(unspentsFromAddress, unspentsTotal, addressTo, amount, addressFrom)
+	rawTX = CreateRawTransaction(unspentsFromAddress, unspentsTotal, addressTo, amount, addressFrom, Decimal(0.0000), False)
 	txLength = len(rawTX)
 	fee = feePerByte * txLength
 	if falseSend: return fee, rawTX
@@ -262,7 +273,7 @@ def GetWalletBalancesList():
 	
 def PrintWalletBalancesList():
 	walletBalances = GetWalletBalancesList()
-	print('PrintWalletBalancesList():')
+	print('PrintWalletBalancesList() [{} wallets]:'.format(len(walletBalances)))
 	for wallet in walletBalances: print('{}: {}'.format(wallet, BTCToSatoshis(walletBalances[wallet])))
 	
 #  Returns a dictionary of addresses to accounts
@@ -290,7 +301,7 @@ def GetAccountBalancesList():
 	
 def PrintAccountBalancesList():
 	accountBalancesList = GetAccountBalancesList()
-	print('PrintAccountBalancesList():')
+	print('PrintAccountBalancesList() [{} accounts]:'.format(len(accountBalancesList)))
 	for account in accountBalancesList: print('{}: {}'.format(account, BTCToSatoshis(accountBalancesList[account])))
 	
 def PrintAccountsList(onlyShowNonZero = False):

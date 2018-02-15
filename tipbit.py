@@ -60,7 +60,6 @@ UsedAddressesLegacy = {}
 UsedAddressesSegwit = {}
 
 def ClaimPrimaryStorageAddresses():
-	print('Claiming Primary Storage Addresses')
 	tipbitUtilities.ImportPrivateKey(botSpecificData.PRIMARY_STORAGE_PRIVATE_KEY, 'PRIMARY STORAGE LEGACY' if botSpecificData.PRIMARY_STORAGE_SEGWIT else 'PRIMARY STORAGE', False)
 	tipbitUtilities.GetNewSegwitAddress('PRIMARY STORAGE' if botSpecificData.PRIMARY_STORAGE_SEGWIT else 'PRIMARY STORAGE SEGWIT', botSpecificData.PRIMARY_STORAGE_ADDRESS_LEGACY, False)
 
@@ -72,6 +71,7 @@ def main():
 		exit()
 		
 	#  Claim the primary storage address
+	print('Claiming Primary Storage Addresses')
 	ClaimPrimaryStorageAddresses()
 
 	#  Set up the GUI
