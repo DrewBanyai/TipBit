@@ -199,10 +199,10 @@ def PrintUnspentsList():
 
 def CreateRawTransaction(inputs, inputsTotal, address, amount, changeAddress, fee = Decimal(0.0000)):
 	feeBTC = SatoshisToBTC(fee)
-	
-	print('Creating raw transaction: [{} : {} : {}]'.format(amount, inputsTotal, fee))
-	
 	amount = min(amount, inputsTotal - feeBTC)
+	
+	print('Creating raw transaction: [{} : {} : {}]'.format(amount, inputsTotal, feeBTC))
+	
 	outputs = {}
 	outputs[address] = amount
 	outputs[changeAddress] = inputsTotal - Decimal(amount) - feeBTC
