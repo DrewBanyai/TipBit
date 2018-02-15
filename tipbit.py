@@ -622,14 +622,6 @@ def mainLoop():
 	lastBitcoinValueTime 	= currentTime
 	lastUpdateGUITime 		= currentTime
 	
-	global storageListbox
-	global depositsListbox
-	
-	global userBalancesCopy
-	global userDepositAddressesCopy
-	solvencyThread = 0
-	depositsThread = 0
-	
 	while (True):
 		try:
 			currentTime = time.time()
@@ -702,6 +694,10 @@ def gatherUnreads():
 				tipbitWindow.AddEventString('Unknown exception on processing of unread messages and comments...')
 	except RequestException:
 		tipbitWindow.AddEventString('RequestException on processing unreads (likely a connection error)', False)
+		return
+	except prawcore.exception.ServerError:
+		tipbitWindow.AddEventString('PrawCore ServerError on processing unreads (likely a connection error)', False)
+		return
 	
 	for item in unreadMessages: markedRead.append(item)
 	for item in unreadMentions: markedRead.append(item)
