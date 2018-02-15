@@ -180,9 +180,11 @@ def GetUnspentsList():
 	try:
 		unspentList = rpc_connection.listunspent(1)
 	except ConnectionAbortedError:
-		print('ConnectionAbortedError Exception in GetUnspentsList(). Returning blank list.')
+		ConsolePrint('ConnectionAbortedError Exception in GetUnspentsList(). Returning blank list.')
 	except CannotSendRequest:
-		print('CannotSendRequest Exception in GetUnspentsList(). Returning blank list.')
+		ConsolePrint('CannotSendRequest Exception in GetUnspentsList(). Returning blank list.')
+	except socket.Timeouterror:
+		ConsolePrint('Socket Timeout Error in GetUnspentsFromAddress...')
 	return unspentList
 	
 def PrintUnspentsList():
