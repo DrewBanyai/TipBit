@@ -171,9 +171,14 @@ def GetNewLegacyAddress(account):
 	
 def GetNewSegwitAddress(account, addressLegacy, printLegacy=False):
 	if printLegacy: print('GetNewSegwitAddress({}, {})'.format(account, addressLegacy))
-	address = rpc_connection.addwitnessaddress(addressLegacy)
-	SetAddressToAccount(address, account)
-	return address
+	try:
+		address = rpc_connection.addwitnessaddress(addressLegacy)
+		SetAddressToAccount(address, account)
+		return address
+	except socket.Timeouterror:
+		ConsolePrint('socket.Timeouterror on GetNewSegwitAddress().')
+		return ''
+		
 	
 def GetUnspentsList():
 	unspentList = []

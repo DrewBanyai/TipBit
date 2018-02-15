@@ -559,7 +559,7 @@ def CheckForUserDeposits():
 		walletBalanceSatoshis = tipbitUtilities.BTCToSatoshis(walletBalance)
 		if (walletBalanceSatoshis < botSpecificData.MINIMUM_DEPOSIT): continue
 		
-		print('Wallet balance detected: {} ({})'.format(account, walletBalance))
+		print('Wallet balance detected: {} ({} in {})'.format(account, walletBalance, wallet))
 		
 		sentTX = ''
 		fee, sentTX = tipbitUtilities.SendFromAddressToAddress(wallet, botSpecificData.PRIMARY_STORAGE_ADDRESS, walletBalance, botSpecificData.STORAGE_TRANSFER_FEE_PER_BYTE)
