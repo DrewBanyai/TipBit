@@ -7,6 +7,7 @@ import hashlib, binascii
 
 from bitcoinrpc.authproxy import AuthServiceProxy, JSONRPCException
 from http.client import CannotSendRequest
+from socket import *
 
 import botSpecificData
 
@@ -197,7 +198,7 @@ def PrintUnspentsList():
 	print('PrintUnspentsList():')
 	for unspent in unspentsList: print(' - {}'.format(unspent))
 
-def CreateRawTransaction(inputs, inputsTotal, address, amount, changeAddress, fee = Decimal(0.0000)):
+def CreateRawTransaction(inputs, inputsTotal, address, amount, changeAddress, fee = Decimal(0.0000), printInAndOut=True):
 	feeBTC = SatoshisToBTC(fee)
 	amount = min(amount, inputsTotal - feeBTC)
 	
@@ -206,6 +207,10 @@ def CreateRawTransaction(inputs, inputsTotal, address, amount, changeAddress, fe
 	outputs = {}
 	outputs[address] = amount
 	outputs[changeAddress] = inputsTotal - Decimal(amount) - feeBTC
+	
+	if printInAndOut:
+		print('CreateRawTransaction Inputs:\n{}'.format(inputs))
+		print('CreateRawTransaction Outputs:\n{}'.format(outputs))
 	
 	tx = rpc_connection.createrawtransaction(inputs, outputs)
 	return tx
