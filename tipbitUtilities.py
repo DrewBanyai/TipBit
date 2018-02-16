@@ -207,7 +207,7 @@ def GetUnspentsList():
 	except CannotSendRequest:
 		ConsolePrint('CannotSendRequest Exception in GetUnspentsList(). Returning blank list.')
 	except timeout:
-		ConsolePrint('Socket Timeout Error in GetUnspentsFromAddress...')
+		ConsolePrint('Socket Timeout Error in GetUnspentsList...')
 	return unspentList
 	
 def PrintUnspentsList():
@@ -337,19 +337,19 @@ def GetUnspentsFromAddress(address, printUnspents=False):
 	unspentList = GetUnspentsList()
 
 	unspentFromAddress = []
-	for unspent in unspentList[:-1]:
+	for unspent in unspentList:
 		if (unspent['address'] == address):
 			entry = {}
 			entry['txid'] = unspent['txid']
 			entry['vout'] = unspent['vout']
 			entry['amount'] = unspent['amount']
 			unspentFromAddress.append(entry)
-	if unspentList[-1]['address'] == address:
-			entry = {}
-			entry['txid'] = unspentList[-1]['txid']
-			entry['vout'] = unspentList[-1]['vout']
-			entry['amount'] = unspentList[-1]['amount']
-			unspentFromAddress.append(entry)
+#	if unspentList[-1]['address'] == address:
+#			entry = {}
+#			entry['txid'] = unspentList[-1]['txid']
+#			entry['vout'] = unspentList[-1]['vout']
+#			entry['amount'] = unspentList[-1]['amount']
+#			unspentFromAddress.append(entry)
 	if printUnspents: print(unspentFromAddress)
 	return unspentFromAddress
 	

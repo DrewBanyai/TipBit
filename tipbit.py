@@ -640,7 +640,7 @@ def mainLoop():
 				
 			#  Run the main loop every 3.0 seconds
 			if (currentTime < lastMainLoopTime): continue
-			lastMainLoopTime = currentTime + 3.0
+			lastMainLoopTime = currentTime + 10.0
 					
 			#  Collect all unread mentions and messages
 			gatherUnreads()
@@ -651,7 +651,7 @@ def mainLoop():
 			#  Attempt to re-post comments that failed to post if at least 10 seconds has gone by
 			if (currentTime > lastUnsentCheckTime):
 				processUnsent()
-				lastUnsentCheckTime = currentTime + 10.0
+				lastUnsentCheckTime = currentTime + 30.0
 			
 			#  Check the next 5 messages
 			processMessages()
