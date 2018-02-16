@@ -401,7 +401,7 @@ def ProcessWithdraw(message, trueWithdrawal):
 	addToUserBalance(username, amount * -1)
 	balanceMBTC = tipbitUtilities.SatoshisToMBTC(getUserBalance(username))
 	tipbitWindow.AddEventString('{} withdrew {} mBTC {}({} + {} fee)'.format(username, amountMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), amountMinusFeeMBTC, estimatedFeeMBTC))
-	reddit.redditor(username).message('Your withdrawal was successful!', messageTemplates.USER_SUCCESS_WITHDRAW_MESSAGE_TEXT.format(amountMBTC, estimatedFeeMBTC, amountMinusFeeMBTC, balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else '')))
+	reddit.redditor(username).message('Your withdrawal was successful!', messageTemplates.USER_SUCCESS_WITHDRAW_MESSAGE_TEXT.format(amountMBTC, estimatedFeeMBTC, amountMinusFeeMBTC, balanceMBTC, (' Testnet Bitcoins' if botSpecificData.testnet else ''), sentTX))
 		
 	return True
 

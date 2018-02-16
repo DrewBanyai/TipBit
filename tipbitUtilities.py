@@ -137,7 +137,15 @@ def GetAccountsList():
 	return accountsList
 	
 def GetAddressListForAccount(account):
-	addressList = rpc_connection.getaddressesbyaccount(account)
+	addressList = []
+	try:
+		addressList = rpc_connection.getaddressesbyaccount(account)
+	except CannotSendRequest:
+		print('CannotSendRequest in GetAddressListForAccount on account {}'.format(account))
+	except timeout:
+		print('socket.timeout in GetAddressListForAccount on account {}'.format(account))
+	except:
+		print('Unknown exception in GetAddressListForAccount on account {}'.format(account))
 	return addressList
 	
 def SetAddressToAccount(address, account):
@@ -182,6 +190,9 @@ def GetNewSegwitAddress(account, addressLegacy, printLegacy=False):
 		address = rpc_connection.addwitnessaddress(addressLegacy)
 		SetAddressToAccount(address, account)
 		return address
+	except CannotSendRequest:
+		print('CannotSendRequest in GetNewSegwitAddress on address {}'.format(addressLegacy))
+		return False
 	except timeout:
 		ConsolePrint('socket.timeout on GetNewSegwitAddress().')
 		return ''
