@@ -623,7 +623,7 @@ def mainLoop():
 				
 			#  Get the latest bitcoin price
 			if (currentTime > lastBitcoinValueTime):
-				tipbitUtilities.GetBitcoinValue(True, primaryTipBalance)
+				tipbitUtilities.GetBitcoinValue()
 				lastBitcoinValueTime = currentTime + 1800.0
 			
 			#  Check for the ESCAPE key, Balance Key (b), and Space Key (spacebar)

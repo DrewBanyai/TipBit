@@ -54,10 +54,9 @@ def isStringFloat(amountString):
 	except ValueError:
 		return False
 		
-def GetBitcoinValue(printValue, tipBalance):
+def GetBitcoinValue():
 	global CurrentUSDPrice
 	CurrentUSDPrice = Decimal(requests.get('https://bitpay.com/api/rates/usd').json()['rate'])
-	if printValue: ConsolePrint('Bitcoin value: ${} (Total Tip Balance is worth ${}'.format("%.2f" % CurrentUSDPrice, "%.2f" % (CurrentUSDPrice * SatoshisToBTC(tipBalance))))
 		
 def SatoshisToBTC(satoshis):
 	return Decimal(satoshis) / Decimal(100000000.0)
