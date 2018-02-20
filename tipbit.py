@@ -40,9 +40,8 @@ userBalances = {}
 userDepositAddressesLegacy = {}
 userDepositAddressesSegwit = {}
 
-primaryStorageBalance = 0
 primaryTipBalance = 0
-primarySolvencyDiff = 0
+primaryStorageBalance = 0
 	
 unreadMessages = []
 unreadMessageCount = 0
@@ -584,7 +583,6 @@ def CheckForUserDeposits():
 def UpdateBalancesAndSolvency():
 	global primaryStorageBalance
 	global primaryTipBalance
-	global primarySolvencyDiff
 	
 	walletBalances = tipbitUtilities.GetWalletBalancesList()
 	if len(walletBalances) == 0:
@@ -599,19 +597,16 @@ def UpdateBalancesAndSolvency():
 	
 	primaryTipBalance = 0
 	for user in userBalances: primaryTipBalance += userBalances[user]
-	
-	primarySolvencyDiff = 0
-	if (primaryTipBalance != primaryStorageBalance): primarySolvencyDiff = primaryTipBalance - primaryStorageBalance
 		
 def UpdateGUI():
 	global primaryStorageBalance
 	global primaryTipBalance
-	global primarySolvencyDiff
 	
 	UpdateBalancesAndSolvency()
 	tipbitWindow.SetGUITipBalanceString(primaryTipBalance)
-	tipbitWindow.SetGUIStorageBalanceString(primaryStorageBalance)
-	tipbitWindow.SetGUISolvencyDiffString(primarySolvencyDiff)
+	tipbitWindow.SetGUISolvencyDiffString(primaryTipBalance - primaryStorageBalance)
+	tipbitWindow.SetGUIBitcoinValueString(tipbitUtilities.CurrentUSDPrice)
+	tipbitWindow.SetGUITipBalanceValueString(Decimal(tipbitUtilities.CurrentUSDPrice) * Decimal(primaryTipBalance) / Decimal(100000000))
 		
 def mainLoop():
 	currentTime = time.time()
