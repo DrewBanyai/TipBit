@@ -408,13 +408,16 @@ def ExportUserBalancesJson(userBalances):
 		json.dump(userBalances, f)
 
 def ImportUserBalancesJson(userBalances, printBalances):
+	balancesUnsorted = {}
 	filepath = "TNUserBalances.json" if botSpecificData.testnet else "UserBalances.json"
 	if os.path.isfile(filepath):
 		with open(filepath, "rb") as f:
 			balances = json.load(f)
 			for balance in balances:
-				userBalances[balance] = balances[balance]
-	
+				balancesUnsorted[balance] = balances[balance]
+				
+	sortedNames = sorted(balancesUnsorted, key=balancesUnsorted.get, reverse=True)
+	for name in sortedNames: userBalances[name] = balancesUnsorted[name]
 	if printBalances: print(userBalances)
 				
 def ExportUserDepositAddressesLegacyJson(userDepositAddressesLegacy):
