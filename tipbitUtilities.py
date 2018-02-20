@@ -208,12 +208,8 @@ def GetUnspentsList():
 		ConsolePrint('CannotSendRequest Exception in GetUnspentsList(). Returning blank list.')
 	except timeout:
 		ConsolePrint('Socket Timeout Error in GetUnspentsList...')
+		ConnectViaRPC()
 	return unspentList
-	
-def PrintUnspentsList():
-	unspentsList = GetUnspentsList()
-	print('PrintUnspentsList():')
-	for unspent in unspentsList: print(' - {}'.format(unspent))
 
 def CreateRawTransaction(inputs, inputsTotal, address, amount, changeAddress, fee = Decimal(0.0000), printInAndOut=True):
 	feeBTC = SatoshisToBTC(fee)
@@ -344,12 +340,6 @@ def GetUnspentsFromAddress(address, printUnspents=False):
 			entry['vout'] = unspent['vout']
 			entry['amount'] = unspent['amount']
 			unspentFromAddress.append(entry)
-#	if unspentList[-1]['address'] == address:
-#			entry = {}
-#			entry['txid'] = unspentList[-1]['txid']
-#			entry['vout'] = unspentList[-1]['vout']
-#			entry['amount'] = unspentList[-1]['amount']
-#			unspentFromAddress.append(entry)
 	if printUnspents: print(unspentFromAddress)
 	return unspentFromAddress
 	
