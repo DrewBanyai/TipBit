@@ -11,18 +11,39 @@ from socket import *
 
 import botSpecificData
 
-rpc_connection = None
+#
+# Variables
+#
 
 MAX_CONSOLE_MESSAGE_STACK = 10
-
 lastConsoleMessage = ''
 lastConsoleMessageCount = 0
 
-CurrentUSDPrice = 9999999.0
+CurrentUSDPrice = 9999999.0				# It should be obvious if this doesn't get set properly at startup
+
+rpc_connection = None
+
+UserAddressesLoaded = False
+UserAddresses = {}						# Dictionary of user names to tuples containing Legacy and Segwit addresses
+AddressToAccountListLoaded = False
+AddressToAccountList = {}
+UnspentsList = {}
+WalletBalancesList = {}
+
+#
+# Functions
+#
 
 def ConnectViaRPC():
 	global rpc_connection
 	rpc_connection = AuthServiceProxy('http://{}:{}@127.0.0.1:{}'.format(botSpecificData.rpc_user, botSpecificData.rpc_password, botSpecificData.port))
+	
+def UpdateNodeData():
+	global UnspentsList
+	global WalletBalancesList
+	
+	UnspentsList = GetUnspentsList()
+	WalletBalancesList = GetWalletBalancesList()
 
 #  Prints to the console, but saves off multiple prints to batch them into one of max size (MAX_CONSOLE_MESSAGE_STACK) if they are repetitive
 def ConsolePrint(string):
@@ -30,8 +51,7 @@ def ConsolePrint(string):
 	global lastConsoleMessageCount
 
 	if (lastConsoleMessage == string):
-		lastConsoleMessageCount += 1
-		if (lastConsoleMessageCount >= MAX_CONSOLE_MESSAGE_STACK):
+		if (++lastConsoleMessageCount >= MAX_CONSOLE_MESSAGE_STACK):
 			print('{} (x {})'.format(string, lastConsoleMessageCount))
 			lastConsoleMessageCount = 0
 	else:
@@ -122,10 +142,31 @@ def PrintBlockchainInfo():
 	print('UNUSED UTILITY FUNCTION: PrintBlockchainInfo')
 	blockchainInfo = GetBlockchainInfo()
 	print('Blockchain Info:\n{}\n'.format(blockchainInfo))
+		
+def GetAccountBalance(account):
+	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (GetAccountBalance)')
+	return rpc_connection.getbalance(account, 3)
+	
+def SendFromAccountToAddress(account, address, amount):
+	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (SendFromAccountToAddress)')
+	print('Sending {} to {} from account {}'.format(amount, address, account))
+	rpc_connection.sendfrom(account, address, amount)
+	
+def MoveCoinsAccountToAccount(accountFrom, accountTo, amount):
+	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (MoveCoinsAccountToAccount)')
+	rpc_connection.move(accountFrom, accountTo, amount)
+	
+def PrintAccountsList(onlyShowNonZero = False):
+	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (PrintAccountsList)')
+	accountsList = GetAccountsList()
+	print('Accounts List:')
+	for account in accountsList:
+		if ((onlyShowNonZero is True) and (accountsList[account] == 0)): continue
+		print(' - {} [{} BTC]'.format(account, accountsList[account]))
 	
 ##### RPC UTILITIES - LEVEL 1 (all used RPC calls in here)
 
-def GetAccountsList():
+def GetAccountsList(minimumValue = Decimal(0.00000001)):
 	accountsList = []
 	try:
 		accountsList = rpc_connection.listaccounts(3, True)
@@ -133,7 +174,19 @@ def GetAccountsList():
 		print('ConnectionAbortedError Exception in GetAccountsList(). Returning blank list.')
 	except CannotSendRequest:
 		print('CannotSendRequest Exception in GetAccountsList(). Returning blank list.')
+		
 	return accountsList
+	
+def GetAddressTupleForAccount(account):
+	if ((UserAddressesLoaded is False) or (account not in UserAddresses)):
+		addressList = GetAddressListForAccount(account);
+		counter = 0
+		for address in addressList:
+			addressList
+		print('Address List: {}'.format(addressList))
+		UserAddresses[account] = (addressList[0], addressList[1])
+		print('UserAddresses: {}'.format(UserAddresses))
+	return UserAddresses[account]
 	
 def GetAddressListForAccount(account):
 	addressList = []
@@ -151,16 +204,13 @@ def SetAddressToAccount(address, account):
 	rpc_connection.setaccount(address, account)
 	
 def GetPrivateKeyFromAddress(address):
+	print("GetPrivateKeyFromAddress()");
 	try:
 		privateKey = rpc_connection.dumpprivkey(address)
 		return privateKey
 	except JSONRPCException:
 		print('JSONRPCException in GetPrivateKeyFromAddress on address {}'.format(address))
 		return ''
-		
-def GetAccountBalance(account):
-	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (GetAccountBalance)')
-	return rpc_connection.getbalance(account, 3)
 		
 def ImportPrivateKey(privateKey, account = '', rescan = False):
 	try:
@@ -242,11 +292,6 @@ def SendRawTransaction(rawTX, printTX=False):
 	if printTX: print('Sent raw transaction: {}'.format(sentTX))
 	return sentTX
 	
-def SendFromAccountToAddress(account, address, amount):
-	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (SendFromAccountToAddress)')
-	print('Sending {} to {} from account {}'.format(amount, address, account))
-	rpc_connection.sendfrom(account, address, amount)
-	
 #  Sends amount minus fee to the given address, returning the value of the fee amount in Satoshis
 def SendFromAddressToAddress(addressFrom, addressTo, amount, feePerByte, falseSend=False):
 	unspentsFromAddress = GetUnspentsFromAddress(addressFrom)
@@ -261,15 +306,12 @@ def SendFromAddressToAddress(addressFrom, addressTo, amount, feePerByte, falseSe
 	sentTX = SendRawTransaction(signedTX['hex'])
 	return fee, sentTX
 	
-def MoveCoinsAccountToAccount(accountFrom, accountTo, amount):
-	rpc_connection.move(accountFrom, accountTo, amount)
-	
 ##### RPC UTILITIES - LEVEL 2 (functions that utilize basic RPC calls through level 1)
 	
 #  Returns a dictionary of wallets and their balances if they have any unspents
 def GetWalletBalancesList():
 	walletBalances = {}
-	unspentsList = GetUnspentsList()
+	unspentsList = UnspentsList
 	for unspent in unspentsList:
 		if (unspent['amount'] == Decimal(0)): continue
 		if (unspent['address'] in walletBalances): walletBalances[unspent['address']] += unspent['amount']
@@ -278,25 +320,31 @@ def GetWalletBalancesList():
 	return walletBalances
 	
 def PrintWalletBalancesList():
-	walletBalances = GetWalletBalancesList()
+	walletBalances = WalletBalancesList
 	print('PrintWalletBalancesList() [{} wallets]:'.format(len(walletBalances)))
 	for wallet in walletBalances: print('{}: {}'.format(wallet, BTCToSatoshis(walletBalances[wallet])))
 	
 #  Returns a dictionary of addresses to accounts
 def GetAddressToAccountList():
+	global AddressToAccountListLoaded
+	global AddressToAccountList
+
+	if (AddressToAccountListLoaded): return AddressToAccountList
+	
 	accountsList = GetAccountsList()
-	addressToAccounts = {}
+	AddressToAccountList = {}
 	for account in accountsList:
 		addressList = GetAddressListForAccount(account)
-		for address in addressList:	addressToAccounts[address] = account
+		for address in addressList:	AddressToAccountList[address] = account
 	
-	return addressToAccounts
+	AddressToAccountListLoaded = True
+	return AddressToAccountList
 	
 #  Returns a list of all accounts (if they have a balance) and their balance
 def GetAccountBalancesList():
 	addressToAccounts = GetAddressToAccountList()
-	walletBalances = GetWalletBalancesList()
 	
+	walletBalances = WalletBalancesList
 	accountBalancesList = {}
 	for wallet in walletBalances:
 		if wallet not in addressToAccounts: continue
@@ -309,14 +357,6 @@ def PrintAccountBalancesList():
 	accountBalancesList = GetAccountBalancesList()
 	print('PrintAccountBalancesList() [{} accounts]:'.format(len(accountBalancesList)))
 	for account in accountBalancesList: print('{}: {}'.format(account, BTCToSatoshis(accountBalancesList[account])))
-	
-def PrintAccountsList(onlyShowNonZero = False):
-	print('DEPRECATED: YOU SHOULD NOT USE ACCOUNTS (PrintAccountsList)')
-	accountsList = GetAccountsList()
-	print('Accounts List:')
-	for account in accountsList:
-		if ((onlyShowNonZero is True) and (accountsList[account] == 0)): continue
-		print(' - {} [{} BTC]'.format(account, accountsList[account]))
 		
 def PrintAddressesOnAccount(account):
 	print('Addresses belonging to \"{}\":'.format(account))
@@ -325,11 +365,12 @@ def PrintAddressesOnAccount(account):
 		print(' - {}'.format(address))
 	
 def PrintPrivateKey(address):
+	print("PrintPrivateKey()");
 	privateKey = GetPrivateKeyFromAddress(address)
 	print('Address {} private key: \n - {}'.format(address, privateKey))
 	
 def GetUnspentsFromAddress(address, printUnspents=False):
-	unspentList = GetUnspentsList()
+	unspentList = UnspentsList
 
 	unspentFromAddress = []
 	for unspent in unspentList:
@@ -358,6 +399,7 @@ def ClaimExistingUserAddresses(userPrivateKeys, userDepositAddressesLegacy, user
 	for username in userDepositAddressesLegacy:
 		userDepositAddressesSegwit[username] = GetUnusedAddressSegwit(username + ' Segwit', userDepositAddressesLegacy[username])
 		if printSegwit: print('Segwit Address ({}) = {}'.format(username, userDepositAddressesSegwit[username]))
+		UserAddresses[username] = (userDepositAddressesLegacy[username], userDepositAddressesSegwit[username])
 	
 def SaveOffUnusedAddresses(UnusedAddressesLegacy, UnusedAddressesSegwit):
 	print('- Saving Off Unused Addresses...')

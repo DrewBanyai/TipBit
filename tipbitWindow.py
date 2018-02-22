@@ -27,6 +27,7 @@ def SetupGUI():
 	Label(window, textvariable=tipBalanceValueStringVar, anchor='center', justify=CENTER, font='Arial 9 bold').place(x=795, y=590, anchor='e')
 	
 def UpdateWindow():
+	ProcessEventQueue()
 	window.update_idletasks()
 	window.update()
 	

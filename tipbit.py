@@ -30,6 +30,7 @@ import tipbitWindow
 #  Determine if this is the testnet or mainnet bot, then connect to the node via RPC
 botSpecificData.DetermineDataBasedOnNetwork('testnet' in sys.argv)
 tipbitUtilities.ConnectViaRPC()
+tipbitUtilities.UpdateNodeData()
 
 reddit = praw.Reddit(botSpecificData.BOT_USERNAME)
 BOT_MENTION = '/u/{}'.format(botSpecificData.BOT_USERNAME)
@@ -103,10 +104,14 @@ def main():
 	
 def CheckForPrimaryStorage():
 	accountsList = tipbitUtilities.GetAccountsList()
-	for account in accountsList:
-		addressList = tipbitUtilities.GetAddressListForAccount(account)
-		for address in addressList:
-			if (address == botSpecificData.PRIMARY_STORAGE_ADDRESS): return True
+	
+	if ('PRIMARY STORAGE' in accountsList):
+		addressList = tipbitUtilities.GetAddressListForAccount('PRIMARY STORAGE')
+		if (botSpecificData.PRIMARY_STORAGE_ADDRESS in addressList): return True
+		
+	if (botSpecificData.PRIMARY_STORAGE_ADDRESS in UnusedAddressesSegwit):
+		tipbitUtilities.SetAddressToAccount(botSpecificData.PRIMARY_STORAGE_ADDRESS, 'PRIMARY STORAGE')
+		return True
 		
 	return False
 
@@ -291,7 +296,7 @@ def ProcessSweepDeposit(message):
 	print('segwit sweep - {}'.format(segwitAddress))
 	
 	sweepAddress = ''
-	balanceList = tipbitUtilities.GetWalletBalancesList()
+	balanceList = tipbitUtilities.WalletBalancesList
 	if 		(legacyAddress in balanceList): 	sweepAddress = legacyAddress
 	elif 	(segwitAddress in balanceList): 	sweepAddress = segwitAddress
 	
@@ -452,6 +457,8 @@ def ParseExistingAddresses():
 	
 	tipbitUtilities.SaveOffUnusedAddresses(UnusedAddressesLegacy, UnusedAddressesSegwit)
 	tipbitUtilities.SaveOffUsedAddresses(UsedAddressesLegacy, UsedAddressesSegwit)
+	
+	tipbitUtilities.GetAddressToAccountList()
 
 def getUserBalance(username):
 	if not isUserRegistered(username): RegisterNewUser(username, False, True)
@@ -538,7 +545,7 @@ def ImportUserData():
 
 def CheckForUserDeposits():
 	global primaryStorageBalance
-	walletBalances = tipbitUtilities.GetWalletBalancesList()
+	walletBalances = tipbitUtilities.WalletBalancesList
 	addressToAccounts = tipbitUtilities.GetAddressToAccountList()
 	
 	for wallet in walletBalances:
@@ -546,7 +553,9 @@ def CheckForUserDeposits():
 			primaryStorageBalance = tipbitUtilities.BTCToSatoshis(walletBalances[wallet])
 			continue
 			
-		if wallet not in addressToAccounts: continue
+		if wallet not in addressToAccounts:
+			print('ERROR: {} not in AddressToAccountsList!'.format(wallet))
+			continue
 		if addressToAccounts[wallet] == '': continue
 		
 		# Get the account name (take out ' Segwit' if it exists)
@@ -584,9 +593,9 @@ def UpdateBalancesAndSolvency():
 	global primaryStorageBalance
 	global primaryTipBalance
 	
-	walletBalances = tipbitUtilities.GetWalletBalancesList()
+	walletBalances = tipbitUtilities.WalletBalancesList
 	if len(walletBalances) == 0:
-		print('GetWalletBalanceList() failed to return a list (connection error?). Skipping solvency check...')
+		tipbitUtilities.ConsolePrint('GetWalletBalanceList() failed to return a list (solvency check)')
 		return
 	
 	if (botSpecificData.PRIMARY_STORAGE_ADDRESS not in walletBalances):
@@ -625,17 +634,19 @@ def mainLoop():
 			if (currentTime > lastBitcoinValueTime):
 				tipbitUtilities.GetBitcoinValue()
 				lastBitcoinValueTime = currentTime + 1800.0
+				UpdateGUI()
 			
 			#  Check for the ESCAPE key, Balance Key (b), and Space Key (spacebar)
 			tipbitUtilities.checkForInput(userBalances)
 			
-			#  Update the window's processing loop and process the event queue
-			tipbitWindow.ProcessEventQueue()
+			#  Update the window's event queue and processing loop
 			tipbitWindow.UpdateWindow()
 				
-			#  Run the main loop every 3.0 seconds
+			#  Run the main loop every 10.0 seconds
 			if (currentTime < lastMainLoopTime): continue
 			lastMainLoopTime = currentTime + 10.0
+			
+			tipbitUtilities.UpdateNodeData()
 					
 			#  Collect all unread mentions and messages
 			gatherUnreads()
