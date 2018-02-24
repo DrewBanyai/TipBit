@@ -255,6 +255,8 @@ def GetUnspentsList():
 		ConsolePrint('ConnectionAbortedError Exception in GetUnspentsList(). Returning blank list.')
 	except CannotSendRequest:
 		ConsolePrint('CannotSendRequest Exception in GetUnspentsList(). Returning blank list.')
+	except JSONRPCException:
+		ConsolePrint('JSONRPCException Exception in GetUnspentsList(). Returning blank list.')
 	except timeout:
 		ConsolePrint('Socket Timeout Error in GetUnspentsList...')
 		ConnectViaRPC()
@@ -323,6 +325,10 @@ def PrintWalletBalancesList():
 	walletBalances = WalletBalancesList
 	print('PrintWalletBalancesList() [{} wallets]:'.format(len(walletBalances)))
 	for wallet in walletBalances: print('{}: {}'.format(wallet, BTCToSatoshis(walletBalances[wallet])))
+	
+def AddAddressToAccountData(account, addressLegacy, addressSegwit):
+	AddressToAccountList[addressLegacy] = account
+	AddressToAccountList[addressSegwit] = account
 	
 #  Returns a dictionary of addresses to accounts
 def GetAddressToAccountList():
