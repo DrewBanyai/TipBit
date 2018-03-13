@@ -526,7 +526,7 @@ def CreateUserData(username):
 	userDepositAddressesSegwit[username] = newAddressSegwit
 	userPrivateKeys[username] = tipbitUtilities.GetPrivateKeyFromAddress(newAddressLegacy)
 	
-	AddAddressToAccountData(username, newAddressLegacy, newAddressSegwit)
+	tipbitUtilities.AddAddressToAccountData(username, newAddressLegacy, newAddressSegwit)
 	
 	tipbitUtilities.ExportUserBalancesJson(userBalances)
 	tipbitUtilities.ExportUserDepositAddressesLegacyJson(userDepositAddressesLegacy)
