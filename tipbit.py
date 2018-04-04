@@ -703,7 +703,7 @@ def gatherUnreads():
 	except RequestException:
 		tipbitWindow.AddEventString('RequestException on processing unreads (likely a connection error)', False)
 		return
-	except prawcore.exception.ServerError:
+	except ServerError:
 		tipbitWindow.AddEventString('PrawCore ServerError on processing unreads (likely a connection error)', False)
 		return
 	
