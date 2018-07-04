@@ -11,6 +11,10 @@ import json
 import botSpecificData
 import string
 from decimal import Decimal
+from socket import *
+from socket import gaierror
+import urllib3
+import requests
 
 #  BIT IMPORTS
 from bit import Key, PrivateKey, PrivateKeyTestnet
@@ -20,6 +24,7 @@ import praw
 from praw.models import Message
 from praw.models import Comment
 from prawcore.exceptions import RequestException
+from prawcore.exceptions import ServerError
 
 #  SEPARATED CODE IMPORTS
 import messageTemplates
@@ -677,6 +682,12 @@ def mainLoop():
 			tipbitWindow.AddEventString("ConnectionError occurred during processing...", False)
 		except RequestException:
 			tipbitWindow.AddEventString('RequestException on processing unreads (likely a connection error)', False)
+		except urllib3.exceptions.NewConnectionError:
+			tipbitWindow.AddEventString('urllib3.exceptions.NewConnectionError occurred during processing...', False)
+		except requests.exceptions.ConnectionError:
+			tipbitWindow.AddEventString('requests.exceptions.ConnectionError occurred during processing...', False)
+		except Exception as ex:
+			tipbitWindow.AddEventString('An exception of type {} occurred.'.format(type(ex)), False)
 	
 #  Gather all unread messages and comments, checking for exceptions along the way (particularly the ones common when using PRAW)
 def gatherUnreads():
