@@ -123,7 +123,7 @@ def CheckForPrimaryStorage():
 def processMessages():
 	#  Hunt through the different subject lines we respond to. If it is anything else, toss it and mention it in console
 	for message in unreadMessages:
-		messageSubject = message.subject.upper()
+		messageSubject = message.subject.upper().strip()
 		messageAuthor = message.author;
 		messageAuthor = ('Name Unknown!' if (messageAuthor is None) else message.author.name.lower())
 		
@@ -132,7 +132,7 @@ def processMessages():
 		elif (messageSubject == 'WITHDRAW'):			ProcessWithdraw(message, True)
 		elif (messageSubject == 'WITHDRAW TEST'):		ProcessWithdraw(message, False)
 		elif (messageSubject == 'BALANCE'):				ProcessBalance(messageAuthor)
-		else:											tipbitWindow.AddEventString("Removing unknown message: {}".format(message))
+		else:											tipbitWindow.AddEventString("Removing unknown message: {} (subject \"{}\")".format(message, messageSubject))
 		unreadMessages.remove(message)
 
 def processComments():
