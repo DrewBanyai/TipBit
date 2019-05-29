@@ -245,6 +245,9 @@ def GetNewSegwitAddress(account, addressLegacy, printLegacy=False):
 	except timeout:
 		ConsolePrint('socket.timeout on GetNewSegwitAddress().')
 		return ''
+    except JSONRPCException:
+        ConsolePrint('RPC call "addwitnessaddress" no longer exists? Check RPC Documentation');
+        return False;
 		
 	
 def GetUnspentsList():
