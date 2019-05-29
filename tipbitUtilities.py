@@ -234,6 +234,12 @@ def GetNewLegacyAddress(account):
 	return address
 	
 def GetNewSegwitAddress(account, addressLegacy, printLegacy=False):
+    //  Print out the addresses tied to [account]
+    addressList1 = rpc_connection.getaddressesbyaccount(account);
+    addressList2 = rpc_connection.getaddressesbylabel(account);
+    ConsolePrint(addressList1)
+    ConsolePrint(addressList2)
+
 	if printLegacy: print('GetNewSegwitAddress({}, {})'.format(account, addressLegacy))
 	try:
 		address = rpc_connection.addwitnessaddress(addressLegacy)
